@@ -213,30 +213,34 @@ def tint_img(img, sat_pct, tint):
     return out
 
 
-def quantize(img, pal, used, lw=1.2, serp=True, chroma_guard=False):
+def quantize(img, pal, used, lw=1.2, serp=True, chroma_guard=False, pure_sat=False):
     w, h = img.size
     labs = [(i, rgb_to_lab(pal[i])) for i in used]
+    orig = [[0] * (w * 3) for _ in range(h)]
     buf = [[0.0] * (w * 3) for _ in range(h)]
     px = img.load()
     for y in range(h):
-        row = buf[y]
+        row, orow = buf[y], orig[y]
         for x in range(w):
             r, g, b = px[x, y]
-            row[x * 3] = float(r)
-            row[x * 3 + 1] = float(g)
-            row[x * 3 + 2] = float(b)
+            orow[x * 3], orow[x * 3 + 1], orow[x * 3 + 2] = r, g, b
+            row[x * 3], row[x * 3 + 1], row[x * 3 + 2] = float(r), float(g), float(b)
     K = [(1, 0, 7 / 16), (-1, 1, 3 / 16), (0, 1, 5 / 16), (1, 1, 1 / 16)]
     idx = Image.new("L", (w, h))
     ip = idx.load()
+    PURE_SAT = 0.5
     for y in range(h):
         rev = serp and (y & 1)
         for i in range(w):
             x = (w - 1 - i) if rev else i
-            r = max(0.0, min(255.0, buf[y][x * 3]))
-            g = max(0.0, min(255.0, buf[y][x * 3 + 1]))
-            b = max(0.0, min(255.0, buf[y][x * 3 + 2]))
-            ri, gi, bi = int(r), int(g), int(b)
-            # 饱和色保色相：源越饱和，明度权重越低
+            r0, g0, b0 = orig[y][x * 3], orig[y][x * 3 + 1], orig[y][x * 3 + 2]
+            pure = pure_sat and sat_of(r0, g0, b0) >= PURE_SAT
+            if pure:
+                ri, gi, bi = r0, g0, b0
+            else:
+                ri = int(max(0.0, min(255.0, buf[y][x * 3])))
+                gi = int(max(0.0, min(255.0, buf[y][x * 3 + 1])))
+                bi = int(max(0.0, min(255.0, buf[y][x * 3 + 2])))
             effw = lw * (1 - 0.7 * sat_of(ri, gi, bi)) if chroma_guard else lw
             L, A, B = rgb_to_lab((ri, gi, bi))
             best, bd = used[0], 1e18
@@ -246,8 +250,10 @@ def quantize(img, pal, used, lw=1.2, serp=True, chroma_guard=False):
                 if d < bd:
                     bd, best = d, pi
             ip[x, y] = best
+            if pure:
+                continue
             tr, tg, tb = pal[best]
-            er, eg, eb = r - tr, g - tg, b - tb
+            er, eg, eb = ri - tr, gi - tg, bi - tb
             for dx, dy, f in K:
                 nx, ny = x + (dx if not rev else -dx), y + dy
                 if 0 <= nx < w and 0 <= ny < h:
@@ -284,19 +290,19 @@ def main():
 
     variants = []
 
-    def add(tag, pal, black, bright, highlight, tint, lw=1.2, guard=False):
+    def add(tag, pal, black, bright, highlight, tint, lw=1.2, guard=False, pure=False):
         img = apply_tone(base, lo, hi, black, bright, 0)
         img = shadows_highlights(img, 0, highlight, 12)
         img = tint_img(img, 0, tint)
-        idx = quantize(img, pal, used, lw, True, guard)
+        idx = quantize(img, pal, used, lw, True, guard, pure)
         # ★ 一律用实测色渲染 = 面板真实显示
         variants.append((tag, render(idx, mea)))
 
-    add("① 关保色相（原来）", dc, 34, -11, 100, -10, 1.2, False)
-    add("② 开保色相", dc, 34, -11, 100, -10, 1.2, True)
-    add("③ 开保色相 + 实测色板", mea, 73, -11, 100, -10, 1.2, True)
-    add("④ 开保色相 + 权重0.8", dc, 34, -11, 100, -10, 0.8, True)
-    add("⑤ 关保色相 + 实测色板", mea, 73, -11, 100, -10, 1.2, False)
+    add("① 都不开（老状态）", dc, 34, -11, 100, -10, 1.2, False, False)
+    add("② 保色相", dc, 34, -11, 100, -10, 1.2, True, False)
+    add("③ 保色相 + 不抖动", dc, 34, -11, 100, -10, 1.2, True, True)
+    add("④ 只不抖动", dc, 34, -11, 100, -10, 1.2, False, True)
+    add("⑤ 保色相+不抖动 实测板", mea, 73, -11, 100, -10, 1.2, True, True)
 
     variants.append(("⑥ 原图（参考）", base))
 

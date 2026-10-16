@@ -199,6 +199,9 @@
                         <label class="opt" style="flex-direction:row;gap:6px;align-items:center"
                                title="源色越饱和，越优先保色相而不是保明暗。红唇、红花这类小面积饱和色不会塌成灰">
                             <input type="checkbox" id="cbChromaGuard" checked> 饱和色保色相</label>
+                        <label class="opt" style="flex-direction:row;gap:6px;align-items:center"
+                               title="超出色域的饱和色（鲜红、艳蓝）直接顶替成色板里最接近的，不参与抖动 —— 否则会被抖成灰的">
+                            <input type="checkbox" id="cbPureSat" checked> 饱和色不抖动</label>
                         <button class="small" id="btnResetTone">全部复位</button>
                     </div>
                     <div class="hint" id="mapInfo">—</div>
@@ -680,7 +683,7 @@
         }
 
         // ======================================================== 量化
-        function quantize(pixels, w, h, palette, activeIdx, kernelName, lWeight, ditherScale, serpentine, chromaGuard) {
+        function quantize(pixels, w, h, palette, activeIdx, kernelName, lWeight, ditherScale, serpentine, chromaGuard, pureSat) {
             const colors = palette.colors;
             const kernel = KERNELS[kernelName] || [];
             const ds = (ditherScale === undefined ? 100 : ditherScale) / 100;
@@ -695,6 +698,7 @@
                 work[o] += dr * f; work[o + 1] += dg * f; work[o + 2] += db * f;
             };
             const lw = lWeight;
+            const PURE_SAT = 0.5;    /* 饱和度超过这个值就"顶替"，不参与抖动 */
             for (let y = 0; y < h; y++) {
                 /* 蛇形扫描：奇数行从右往左走，并且把核的 dx 取反。
                  * 误差扩散的方向性伪影（斜纹/蠕虫）主要来自"每行都朝同一个方向推误差"，
@@ -703,15 +707,28 @@
                 for (let i = 0; i < w; i++) {
                     const x = rev ? (w - 1 - i) : i;
                     const o = (y * w + x) * 4;
-                    const r = Math.max(0, Math.min(255, work[o]));
-                    const g = Math.max(0, Math.min(255, work[o + 1]));
-                    const b = Math.max(0, Math.min(255, work[o + 2]));
+
+                    /* 「饱和色不抖动」：超出色域的饱和色**顶替**，不**混合**。
+                     *
+                     * 为什么：色板的红色族根本到不了鲜红。如果让 Floyd 去抖，
+                     * 它会一部分像素挑红、一部分被邻域误差带偏挑灰，
+                     * 平均下来就是「灰红」—— 用户看到的就是「红唇被压成灰红」。
+                     *
+                     * 对这类颜色应该直接用色板里最红的那个：不接受邻域误差
+                     * （用原始像素值），也不把误差扩散出去。
+                     * 宁可牺牲一点明暗关系，也要让颜色站得住。 */
+                    const r0 = pixels[o], g0 = pixels[o + 1], b0 = pixels[o + 2];
+                    const pure = pureSat && getSaturation(r0, g0, b0) >= PURE_SAT;
+
+                    const r = pure ? r0 : Math.max(0, Math.min(255, work[o]));
+                    const g = pure ? g0 : Math.max(0, Math.min(255, work[o + 1]));
+                    const b = pure ? b0 : Math.max(0, Math.min(255, work[o + 2]));
 
                     /* 饱和色保色相：源色越饱和，明度权重压得越低。
                      *
                      * 为什么需要：色板的红色族最亮只到 L*46，而鲜明红唇在 L*50 以上。
                      * 明度权重 1.2 会让量化器去挑"L* 接近"的档位，而那附近没有红色
-                     * （只有灰/橄榄）—— 结果红唇变成灰的，看起来就是"鲜红变暗红"。
+                     * （只有灰/橄榄）—— 结果红唇变成灰的。
                      *
                      * 对饱和像素把明度权重降下来，它就会宁可牺牲一点明暗也要选红色。
                      * epdoptimize 的 colorMatching:"chroma" 是同一个思路。 */
@@ -728,6 +745,9 @@
                         if (d < bestD) { bestD = d; best = list[k]; }
                     }
                     out[y * w + x] = best;
+
+                    if (pure) continue;      /* 顶替的像素不把误差扩散出去 */
+
                     const tc = colors[best];
                     const dr = (r - tc[0]) * ds, dg = (g - tc[1]) * ds, db = (b - tc[2]) * ds;
                     for (const [kx, ky, f] of kernel) {
@@ -883,7 +903,8 @@
             const qIdx = quantize(imageData.data, w, h, palette,
                 palette.active, el('selDither').value,
                 Number(el('rLWeight').value), Number(el('rDither').value),
-                el('cbSerpentine').checked, el('cbChromaGuard').checked);
+                el('cbSerpentine').checked, el('cbChromaGuard').checked,
+                el('cbPureSat').checked);
             const ms = performance.now() - t0;
 
             // 预览按构图方向画 = 上屏后看到的方向
@@ -1056,7 +1077,7 @@
             render();
         }
 
-        for (const id of ['selPalette', 'selDither', 'selSize', 'cbAuto', 'cbSerpentine', 'cbChromaGuard']) {
+        for (const id of ['selPalette', 'selDither', 'selSize', 'cbAuto', 'cbSerpentine', 'cbChromaGuard', 'cbPureSat']) {
             el(id).addEventListener('input', render);
             el(id).addEventListener('change', render);
         }
@@ -1089,7 +1110,7 @@
             bright: -11, contrast: 0, sat: 0,
             shadow: 0, highlight: 100, radius: 12,
             tint: -10, lWeight: 1.2, ditherAmt: 100,
-            panelMap: 0, auto: true, blackAuto: true, serpentine: true, chromaGuard: true,
+            panelMap: 0, auto: true, blackAuto: true, serpentine: true, chromaGuard: true, pureSat: true,
         };
 
         const PRESETS = {
@@ -1122,6 +1143,7 @@
             el('cbBlackAuto').checked = p.blackAuto;
             el('cbSerpentine').checked = p.serpentine;
             el('cbChromaGuard').checked = p.chromaGuard !== false;
+            el('cbPureSat').checked = p.pureSat !== false;
             if (p.palette && palettes[p.palette]) el('selPalette').value = p.palette;
             if (!p.blackAuto) setRange('rBlack', 60);
             render();
@@ -1147,6 +1169,7 @@
                 blackAuto: el('cbBlackAuto').checked,
                 serpentine: el('cbSerpentine').checked,
                 chromaGuard: el('cbChromaGuard').checked,
+                pureSat: el('cbPureSat').checked,
             };
         }
 
@@ -1169,6 +1192,7 @@
             el('cbBlackAuto').checked = s.blackAuto !== false;
             el('cbSerpentine').checked = s.serpentine !== false;
             el('cbChromaGuard').checked = s.chromaGuard !== false;
+            el('cbPureSat').checked = s.pureSat !== false;
             render();
         }
 
