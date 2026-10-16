@@ -98,6 +98,18 @@
                        pointer-events: none; }
         #dropOverlay.on { display: flex; }
 
+        /* 临时提示条：几秒后自动消失，不占版面 */
+        #toast { position: fixed; left: 50%; bottom: 26px; z-index: 1000;
+                 transform: translateX(-50%) translateY(14px);
+                 background: #232733; border: 1px solid var(--line); color: var(--tx);
+                 padding: 9px 20px; border-radius: 10px; font-size: 13px;
+                 max-width: 82vw; text-align: center; pointer-events: none;
+                 box-shadow: 0 8px 28px rgba(0, 0, 0, .45);
+                 opacity: 0; transition: opacity .2s, transform .2s; }
+        #toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
+        #toast.ok { border-color: var(--ok); }
+        #toast.err { border-color: var(--err); }
+
         #bar { display: none; }
 
         /* 下发按钮当进度条：底色是按钮，亮色填充是进度 */
@@ -111,6 +123,7 @@
 
 <body>
     <div id="dropOverlay">松手即可载入图片</div>
+    <div id="toast"></div>
 
     <header>
         <h1>48色墨水屏 · 传图台</h1>
@@ -145,7 +158,6 @@
         <div class="card">
             <h2>量化后（将下发到设备）</h2>
             <div class="view"><canvas id="cvDst" width="480" height="720"></canvas></div>
-            <div class="hint" id="txHint"></div>
         </div>
 
         <!-- 列 3：参数 -->
@@ -190,7 +202,6 @@
                 <button class="small" id="btnSaveDefault"
                         title="把当前所有参数存成下次打开的默认值">存为默认</button>
             </div>
-            <div class="hint" id="toneInfo"></div>
 
             <details class="adv">
                 <summary>高级</summary>
@@ -268,6 +279,16 @@
             el('statusLine').textContent = text;
             el('statusLine').style.color =
                 cls === 'l-err' ? 'var(--err)' : (cls === 'l-ok' ? 'var(--ok)' : 'var(--dim)');
+        }
+
+        // 临时提示条：几秒后自己消失，不会把版面撑长
+        let toastHide = null, toastInfo = null;
+        function toast(text, cls, ms = 3200) {
+            const t = el('toast');
+            t.textContent = text;
+            t.className = 'on' + (cls ? ' ' + cls : '');
+            clearTimeout(toastHide);
+            toastHide = setTimeout(() => { t.className = ''; }, ms);
         }
 
         // WiFi 直连：网页直接 POST 到设备。串口只在「从串口读取」IP 时用一次。
@@ -703,10 +724,15 @@
             if (w < h) { const r = rotCW(qIdx, w, h); sendIdx = r.idx; fw = r.w; fh = r.h; }
             state.idx = sendIdx; state.w = fw; state.h = fh;
 
-            el('txHint').textContent =
-                `预览 ${w}×${h} · 下发 ${fw}×${fh} · 用了 ${new Set(sendIdx).size} 种颜色`
-                + ` · 量化 ${ms.toFixed(0)} ms · 传输约 ${(sendIdx.length / 115200).toFixed(1)} 秒`;
-            el('toneInfo').textContent = tone ? `自动色阶：把 ${tone.lo}~${tone.hi} 拉到 0~255` : '色调映射已关闭';
+            /* 量化信息用**临时弹窗**显示，不占版面。
+             * 拖滑杆时 render() 会被频繁调用，所以停手 600ms 才弹一次，
+             * 不然会刷屏。 */
+            const info = `预览 ${w}×${h} · 下发 ${fw}×${fh} · ${new Set(sendIdx).size} 种颜色`
+                + ` · 量化 ${ms.toFixed(0)} ms · 传输约 ${(sendIdx.length / 115200).toFixed(1)} 秒`
+                + (tone ? ` · 色阶 ${tone.lo}~${tone.hi}` : '');
+            clearTimeout(toastInfo);
+            toastInfo = setTimeout(() => toast(info), 600);
+
             refreshButtons();
         }
 
@@ -807,6 +833,7 @@
         el('btnSaveDefault').addEventListener('click', () => {
             localStorage.setItem('epd_defaults', JSON.stringify(currentSettings()));
             say('✓ 已存为默认 —— 下次打开就是这套参数', 'l-ok');
+            toast('✓ 已存为默认', 'ok');
         });
 
         // ======================================================== 选图
@@ -845,6 +872,7 @@
             state.img = img;
             el('emptyHint').classList.add('hide');
             say('已载入：' + file.name, 'l-ok');
+            toast('已载入 ' + file.name, 'ok', 2000);
             render();
         }
 
@@ -899,10 +927,12 @@
 
             if (r && r.ok) {
                 say(`✓ 已刷新到屏幕（全程 ${dt} 秒：下发 ${(upMs / 1000).toFixed(1)}s + 刷新 ${refreshMs / 1000}s）`, 'l-ok');
+                toast(`✓ 已刷新到屏幕（${dt} 秒）`, 'ok', 4500);
                 el('dot').classList.add('on');
                 el('status').textContent = '在线 ' + el('ipAddr').value.trim();
             } else {
                 say('✗ 下发失败：' + ((r && (r.error || r.err)) || '设备没响应'), 'l-err');
+                toast('✗ 下发失败：' + ((r && (r.error || r.err)) || '设备没响应'), 'err', 6000);
             }
         }
         el('btnSend').addEventListener('click', () => { send().catch((e) => say('出错：' + e.message, 'l-err')); });
@@ -917,8 +947,10 @@
                 el('dot').classList.add('on');
                 el('status').textContent = '在线 ' + r.ip;
                 say('✓ 设备 IP = ' + r.ip, 'l-ok');
+                toast('✓ 设备 IP = ' + r.ip, 'ok', 4000);
             } else {
                 say('✗ 没读到 IP。板子起来了吗？串口被别的程序占着吗？也可以直接在串口里敲 e', 'l-err');
+                toast('✗ 没读到设备 IP —— 串口被占着吗？', 'err', 6000);
             }
         });
 
