@@ -200,7 +200,7 @@
                                title="源色越饱和，越优先保色相而不是保明暗。红唇、红花这类小面积饱和色不会塌成灰">
                             <input type="checkbox" id="cbChromaGuard" checked> 饱和色保色相</label>
                         <label class="opt" style="flex-direction:row;gap:6px;align-items:center"
-                               title="超出色域的饱和色（鲜红、艳蓝）直接顶替成色板里最接近的，不参与抖动 —— 否则会被抖成灰的">
+                               title="按饱和度平滑处理：越饱和越向原色靠、越少扩散误差。既保住色相又不开裂渐变">
                             <input type="checkbox" id="cbPureSat" checked> 饱和色不抖动</label>
                         <button class="small" id="btnResetTone">全部复位</button>
                     </div>
@@ -698,7 +698,6 @@
                 work[o] += dr * f; work[o + 1] += dg * f; work[o + 2] += db * f;
             };
             const lw = lWeight;
-            const PURE_SAT = 0.5;    /* 饱和度超过这个值就"顶替"，不参与抖动 */
             for (let y = 0; y < h; y++) {
                 /* 蛇形扫描：奇数行从右往左走，并且把核的 dx 取反。
                  * 误差扩散的方向性伪影（斜纹/蠕虫）主要来自"每行都朝同一个方向推误差"，
@@ -708,21 +707,30 @@
                     const x = rev ? (w - 1 - i) : i;
                     const o = (y * w + x) * 4;
 
-                    /* 「饱和色不抖动」：超出色域的饱和色**顶替**，不**混合**。
+                    /* 「饱和色不抖动」—— 注意是**渐变**，不是开关。
                      *
-                     * 为什么：色板的红色族根本到不了鲜红。如果让 Floyd 去抖，
-                     * 它会一部分像素挑红、一部分被邻域误差带偏挑灰，
-                     * 平均下来就是「灰红」—— 用户看到的就是「红唇被压成灰红」。
+                     * 为什么：色板的红色族根本到不了鲜红。让 Floyd 全额去抖，
+                     * 一部分像素挑红、一部分被邻域误差带偏挑灰，平均下来就是「灰红」。
                      *
-                     * 对这类颜色应该直接用色板里最红的那个：不接受邻域误差
-                     * （用原始像素值），也不把误差扩散出去。
-                     * 宁可牺牲一点明暗关系，也要让颜色站得住。 */
+                     * 但第一版做成硬开关（饱和度 >=0.5 就完全不抖、不扩散）**过头了**：
+                     * 饱和区域里会切出硬边，而且误差不扩散，渐变直接断掉 —— 用户报
+                     * 「红色过头，而且到处出现断层」。
+                     *
+                     * 改成按饱和度平滑插值：
+                     *   k = 向"原始像素值"靠近的比例，也是误差扩散的衰减比例
+                     *   中性色 k=0（正常抖动，渐变靠它） 饱和色 k=0.85（基本顶替）
+                     * 这样既保住色相，又不会切开渐变。 */
                     const r0 = pixels[o], g0 = pixels[o + 1], b0 = pixels[o + 2];
-                    const pure = pureSat && getSaturation(r0, g0, b0) >= PURE_SAT;
+                    const sat = getSaturation(r0, g0, b0);
+                    const k = pureSat ? 0.85 * Math.min(1, sat / 0.6) : 0;
 
-                    const r = pure ? r0 : Math.max(0, Math.min(255, work[o]));
-                    const g = pure ? g0 : Math.max(0, Math.min(255, work[o + 1]));
-                    const b = pure ? b0 : Math.max(0, Math.min(255, work[o + 2]));
+                    const wr = Math.max(0, Math.min(255, work[o]));
+                    const wg = Math.max(0, Math.min(255, work[o + 1]));
+                    const wb = Math.max(0, Math.min(255, work[o + 2]));
+                    const r = k * r0 + (1 - k) * wr;
+                    const g = k * g0 + (1 - k) * wg;
+                    const b = k * b0 + (1 - k) * wb;
+                    const keep = 1 - k;      /* 误差扩散的保留比例 */
 
                     /* 饱和色保色相：源色越饱和，明度权重压得越低。
                      *
@@ -746,10 +754,10 @@
                     }
                     out[y * w + x] = best;
 
-                    if (pure) continue;      /* 顶替的像素不把误差扩散出去 */
-
                     const tc = colors[best];
-                    const dr = (r - tc[0]) * ds, dg = (g - tc[1]) * ds, db = (b - tc[2]) * ds;
+                    const dr = (r - tc[0]) * ds * keep;
+                    const dg = (g - tc[1]) * ds * keep;
+                    const db = (b - tc[2]) * ds * keep;
                     for (const [kx, ky, f] of kernel) {
                         add(x + (rev ? -kx : kx), y + ky, dr, dg, db, f);
                     }
@@ -1104,7 +1112,7 @@
 
         /* 预设：默认值就是实测调出来的一套（见 docs/调色迭代记录.md） */
         const DEFAULTS = {
-            palette: '48-color-qual-c050.act',  /* 校正 5%（物理边界推的，对比度落在 15~22） */
+            palette: '48-color-qual-c025.act',  /* 校正 2.5% —— 5% 会把红色一起压暗，实测 2.5% 红色更正常 */
             dither: 'floyd-steinberg',
             size: '480x720',
             bright: -11, contrast: 0, sat: 0,

@@ -234,14 +234,17 @@ def quantize(img, pal, used, lw=1.2, serp=True, chroma_guard=False, pure_sat=Fal
         for i in range(w):
             x = (w - 1 - i) if rev else i
             r0, g0, b0 = orig[y][x * 3], orig[y][x * 3 + 1], orig[y][x * 3 + 2]
-            pure = pure_sat and sat_of(r0, g0, b0) >= PURE_SAT
-            if pure:
-                ri, gi, bi = r0, g0, b0
-            else:
-                ri = int(max(0.0, min(255.0, buf[y][x * 3])))
-                gi = int(max(0.0, min(255.0, buf[y][x * 3 + 1])))
-                bi = int(max(0.0, min(255.0, buf[y][x * 3 + 2])))
-            effw = lw * (1 - 0.7 * sat_of(ri, gi, bi)) if chroma_guard else lw
+            sat = sat_of(r0, g0, b0)
+            k = 0.85 * min(1.0, sat / 0.6) if pure_sat else 0.0
+            keep = 1 - k
+            wr = max(0.0, min(255.0, buf[y][x * 3]))
+            wg = max(0.0, min(255.0, buf[y][x * 3 + 1]))
+            wb = max(0.0, min(255.0, buf[y][x * 3 + 2]))
+            rf = k * r0 + keep * wr
+            gf = k * g0 + keep * wg
+            bf = k * b0 + keep * wb
+            ri, gi, bi = int(rf), int(gf), int(bf)
+            effw = lw * (1 - 0.7 * sat) if chroma_guard else lw
             L, A, B = rgb_to_lab((ri, gi, bi))
             best, bd = used[0], 1e18
             for pi, (pl, pa, pb) in labs:
@@ -250,10 +253,8 @@ def quantize(img, pal, used, lw=1.2, serp=True, chroma_guard=False, pure_sat=Fal
                 if d < bd:
                     bd, best = d, pi
             ip[x, y] = best
-            if pure:
-                continue
             tr, tg, tb = pal[best]
-            er, eg, eb = ri - tr, gi - tg, bi - tb
+            er, eg, eb = (rf - tr) * keep, (gf - tg) * keep, (bf - tb) * keep
             for dx, dy, f in K:
                 nx, ny = x + (dx if not rev else -dx), y + dy
                 if 0 <= nx < w and 0 <= ny < h:
@@ -290,19 +291,32 @@ def main():
 
     variants = []
 
+    c025, _ = load_palette(os.path.join(DOCS, "palette_qual_去污染.csv")) if False else (None, None)
+    # 三档校正色板
+    def fix_level(b):
+        out = []
+        for i in range(64):
+            rgb = []
+            for c in range(3):
+                v = max(0.0, SRGB[mea[i][c]] - b)
+                rgb.append(max(0, min(255, round(lin_to_srgb(v) * 255))))
+            out.append(tuple(rgb))
+        return out
+    c025 = fix_level(0.025)
+    c050 = fix_level(0.050)
+
     def add(tag, pal, black, bright, highlight, tint, lw=1.2, guard=False, pure=False):
         img = apply_tone(base, lo, hi, black, bright, 0)
         img = shadows_highlights(img, 0, highlight, 12)
         img = tint_img(img, 0, tint)
         idx = quantize(img, pal, used, lw, True, guard, pure)
-        # ★ 一律用实测色渲染 = 面板真实显示
         variants.append((tag, render(idx, mea)))
 
-    add("① 都不开（老状态）", dc, 34, -11, 100, -10, 1.2, False, False)
-    add("② 保色相", dc, 34, -11, 100, -10, 1.2, True, False)
-    add("③ 保色相 + 不抖动", dc, 34, -11, 100, -10, 1.2, True, True)
-    add("④ 只不抖动", dc, 34, -11, 100, -10, 1.2, False, True)
-    add("⑤ 保色相+不抖动 实测板", mea, 73, -11, 100, -10, 1.2, True, True)
+    add("① 2.5% 硬开关（你现在）", c025, 60, -11, 100, -10, 1.2, True, False)
+    add("② 2.5% 平滑（新）", c025, 60, -11, 100, -10, 1.2, True, True)
+    add("③ 2.5% 不保色相", c025, 60, -11, 100, -10, 1.2, False, False)
+    add("④ 5.0% 平滑", c050, 34, -11, 100, -10, 1.2, True, True)
+    add("⑤ 实测原值 平滑", mea, 73, -11, 100, -10, 1.2, True, True)
 
     variants.append(("⑥ 原图（参考）", base))
 
