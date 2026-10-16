@@ -50,4 +50,17 @@ esp_err_t device_save_and_show(const char *name, const uint8_t *data, size_t len
 const char *device_last_msg(void);
 void device_set_last_msg(const char *fmt, ...);
 
+/* ---------------- 进度上报（供网页轮询 /status 用）----------------
+ *
+ * 为什么需要：刷屏要 15 秒，而且是在 httpd 任务里**同步**跑的 ——
+ * 那样网页在刷屏期间连 /status 都问不到。所以 /raw 收完数据立刻返回，
+ * 实际的显示交给一个独立任务，网页轮询这里的进度。
+ *
+ * phase 取值：recv / refresh1 / refresh2 / refresh3 / idle
+ * progress：0~100，-1 表示空闲
+ */
+void        device_set_phase(const char *phase, int progress);
+const char *device_phase(void);
+int         device_progress(void);
+
 #endif /* DEVICE_API_H */

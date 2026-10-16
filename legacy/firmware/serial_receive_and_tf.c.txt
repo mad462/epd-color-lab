@@ -1,0 +1,497 @@
+/* 从固件里摘出来的「串口接图」和「TF 卡存图/浏览」代码。
+ * 自动生成，**不参与构建** —— 留档用。
+ *
+ * 这两条路是把 48 色跑通时的主要调试手段：串口 115200 传一张图 30 秒，
+ * 但胜在不需要网络。现在图片走 WiFi 直连（http://<设备IP>/raw，
+ * 338KB 只要几秒），串口只留着读设备 IP。
+ *
+ * 要退回去用：把下面的函数贴回 main.c / image.c，
+ * 再把 cli_loop 里对应的 case 分支和帮助文本恢复即可。
+ */
+
+/* ======== main.c :: recv_and_display ======== */
+/* 从串口收一张 8bpp 索引图并显示 */
+static void recv_and_display(bool use_fast)
+{
+    if (s_index == NULL) {
+        ESP_LOGE(TAG, "索引缓冲没分配");
+        return;
+    }
+
+    const size_t len = (size_t)EPD370_WIDTH * EPD370_HEIGHT;
+
+    /* 没初始化过就先初始化：不然写波形会被 ESP_ERR_INVALID_STATE 拒掉 */
+    if (!epd370_is_ready()) {
+        ESP_LOGW(TAG, "还没初始化，先跑一遍 init");
+        if (epd370_init() != ESP_OK) {
+            ESP_LOGE(TAG, "初始化失败，放弃");
+            return;
+        }
+    }
+
+    ESP_LOGI(TAG, "=== 收图（%u 字节）-> %s ===", (unsigned)len,
+             use_fast ? "ColorFast 2 相" : "ColorQual 3 相");
+
+    if (image_recv_serial(s_index, len) != ESP_OK) {
+        ESP_LOGE(TAG, "收图失败");
+        return;
+    }
+
+    const esp_err_t e = use_fast ? display_fast(s_index) : display_qual(s_index);
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "显示失败: %s", esp_err_to_name(e));
+    }
+}
+
+/* ======== main.c :: rot_name ======== */
+static const char *rot_name(bmp_rot_t r)
+{
+    return (r == BMP_ROT_CCW) ? "逆时针" : "顺时针";
+}
+
+/* ======== main.c :: sd_print_entry ======== */
+/* 打印一张图的参数：大小 / BMP 尺寸 / 位深 / 颜色表项数。
+ * 服务器靠这行给网页填列表，格式尽量稳定：
+ *   [ 0] name.bmp  345910 B  480x720  8bpp  64色
+ *   [ 1] bad.bmp   1234 B    (不是可用的 BMP)      */
+static void sd_print_entry(int i)
+{
+    char path[SDCARD_NAME_MAX + 32];
+    snprintf(path, sizeof(path), "%s/%s", IMAGE_DIR, s_files[i].name);
+
+    struct stat st;
+    const long size = (stat(path, &st) == 0) ? (long)st.st_size : -1;
+
+    bmp_info_t info;
+    if (bmp_read_info(path, &info) == ESP_OK) {
+        printf("  [%2d] %s  %ld B  %dx%d  %ubpp  %u色\n",
+               i, s_files[i].name, size, info.width, info.height,
+               (unsigned)info.bit_depth, (unsigned)info.palette_colors);
+    } else {
+        printf("  [%2d] %s  %ld B  (不是可用的 BMP)\n", i, s_files[i].name, size);
+    }
+    fflush(stdout);
+}
+
+/* ======== main.c :: sd_scan ======== */
+static void sd_scan(void)
+{
+    if (!sdcard_is_mounted() && sdcard_mount() != ESP_OK) {
+        printf("TF 卡没挂上（卡插了吗？）\n");
+        fflush(stdout);
+        return;
+    }
+
+    (void)sdcard_ensure_dir(IMAGE_DIR);
+    s_file_count = sdcard_scan_dir(IMAGE_DIR, ".bmp", s_files, SDCARD_MAX_ENTRIES);
+    s_file_index = 0;
+
+    printf("\n%s 里找到 %d 张 BMP：\n", IMAGE_DIR, s_file_count);
+    for (int i = 0; i < s_file_count; i++) {
+        sd_print_entry(i);
+    }
+    printf("按 'j' 输编号跳转，'n'/'p' 翻页，'d' 重显，'r' 换旋转方向\n");
+    fflush(stdout);
+}
+
+/* ======== main.c :: sd_show ======== */
+/* 显示第 idx 张（越界会绕回） */
+static void sd_show(int idx)
+{
+    if (s_file_count <= 0) {
+        printf("还没有图片列表，先按 'l' 扫描 TF 卡\n");
+        fflush(stdout);
+        return;
+    }
+    if (idx < 0) {
+        idx = s_file_count - 1;
+    }
+    if (idx >= s_file_count) {
+        idx = 0;
+    }
+    s_file_index = idx;
+
+    char path[SDCARD_NAME_MAX + 32];
+    snprintf(path, sizeof(path), "%s/%s", IMAGE_DIR, s_files[idx].name);
+
+    if (s_index == NULL) {
+        return;
+    }
+
+    ESP_LOGI(TAG, "[%d/%d] 读 %s", idx + 1, s_file_count, s_files[idx].name);
+    if (bmp_load_index8(path, s_index, EPD370_WIDTH, EPD370_HEIGHT, s_rot) != ESP_OK) {
+        return;
+    }
+
+    if (!epd370_is_ready() && epd370_init() != ESP_OK) {
+        ESP_LOGE(TAG, "初始化失败");
+        return;
+    }
+
+    /* BMP 自带颜色表 —— 拿它和我们的两张色板比，判断用户选的是哪张，
+     * 从而决定走 ColorQual 3 相还是 ColorFast 2 相。 */
+    const int match_qual = bmp_count_palette_match(path, palette_qual, PALETTE_ENTRIES);
+    const int match_fast = bmp_count_palette_match(path, palette_fast, PALETTE_ENTRIES);
+    const bool use_fast = match_fast > match_qual;
+
+    ESP_LOGI(TAG, "色板匹配：ColorQual %d / 64，ColorFast %d / 64 -> 走 %s",
+             match_qual, match_fast, use_fast ? "ColorFast 2 相" : "ColorQual 3 相");
+    if (match_qual < 32 && match_fast < 32) {
+        ESP_LOGW(TAG, "两张都不太匹配 —— 导出时可能没选 48 色色板，颜色会不对");
+    }
+
+    const esp_err_t e = use_fast ? display_fast(s_index) : display_qual(s_index);
+
+    /* 显示这十几秒里按的键全部丢掉 —— 免得网页连点导致连刷好几张 */
+    image_drain_input(200);
+
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "显示失败: %s", esp_err_to_name(e));
+    }
+}
+
+/* ======== main.c :: recv_file_to_sd ======== */
+/* 从串口收一个文件存到 TF 卡，然后直接显示它 */
+static void recv_file_to_sd(void)
+{
+    if (!sdcard_is_mounted() && sdcard_mount() != ESP_OK) {
+        ESP_LOGE(TAG, "TF 卡没挂上，收不了文件");
+        return;
+    }
+
+    char path[256];
+    if (image_recv_file(IMAGE_DIR, path, sizeof(path)) != ESP_OK) {
+        ESP_LOGE(TAG, "收文件失败");
+        return;
+    }
+
+    /* 存完顺手显示 —— 重扫一次列表，让新文件进目录 */
+    s_file_count = sdcard_scan_dir(IMAGE_DIR, ".bmp", s_files, SDCARD_MAX_ENTRIES);
+    s_file_index = 0;
+    const char *base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    for (int i = 0; i < s_file_count; i++) {
+        if (strcasecmp(s_files[i].name, base) == 0) {
+            sd_show(i);
+            return;
+        }
+    }
+
+    ESP_LOGW(TAG, "存好了但没在 .bmp 列表里找到 %s（不是 .bmp？）", base);
+}
+
+/* ======== main.c :: jump_input ======== */
+static bool jump_input(int c)
+{
+    if (c >= '0' && c <= '9') {
+        if (s_jump_len < 5) {
+            s_jump_digits[s_jump_len++] = (char)c;
+        }
+        return true;
+    }
+
+    if (c == '\n' || c == '\r') {
+        if (s_jump_len > 0) {
+            char tmp[8];
+            memcpy(tmp, s_jump_digits, (size_t)s_jump_len);
+            tmp[s_jump_len] = '\0';
+            s_jump_len = 0;
+
+            const int want = atoi(tmp);
+            if (want >= 1 && want <= s_file_count) {
+                s_jump_mode = false;
+                sd_show(want - 1);
+            } else {
+                printf("编号超出范围 1~%d\n", s_file_count);
+                fflush(stdout);
+            }
+        }
+        return true;
+    }
+
+    if (c == 27 || c == 'x') {   /* ESC */
+        s_jump_mode = false;
+        printf("取消跳转\n");
+        fflush(stdout);
+        return true;
+    }
+
+    return true;   /* 跳转模式里其它键一律忽略 */
+}
+
+/* ======== main.c :: device_rescan ======== */
+/* 扫一遍卡，只更新内部列表 */
+static int device_rescan(void)
+{
+    if (!sdcard_is_mounted() && sdcard_mount() != ESP_OK) {
+        s_file_count = 0;
+        return 0;
+    }
+    (void)sdcard_ensure_dir(IMAGE_DIR);
+    s_file_count = sdcard_scan_dir(IMAGE_DIR, ".bmp", s_files, SDCARD_MAX_ENTRIES);
+    return s_file_count;
+}
+
+/* ======== main.c :: device_scan ======== */
+int device_scan(device_file_t *out, int max)
+{
+    const int total = device_rescan();
+    if (out == NULL) return total;
+
+    int n = 0;
+    for (int i = 0; i < total && n < max; i++) {
+        device_file_t *d = &out[n];
+        memset(d, 0, sizeof(*d));
+        snprintf(d->name, sizeof(d->name), "%s", s_files[i].name);
+
+        char path[SDCARD_NAME_MAX + 32];
+        snprintf(path, sizeof(path), "%s/%s", IMAGE_DIR, s_files[i].name);
+
+        struct stat st;
+        d->size = (stat(path, &st) == 0) ? (long)st.st_size : -1;
+
+        bmp_info_t info;
+        if (bmp_read_info(path, &info) == ESP_OK) {
+            d->is_bmp = true;
+            d->w = info.width;
+            d->h = info.height;
+            d->bpp = (int)info.bit_depth;
+            d->colors = (int)info.palette_colors;
+        }
+        n++;
+    }
+    return n;
+}
+
+/* ======== main.c :: device_show ======== */
+esp_err_t device_show(int idx)
+{
+    if (s_file_count <= 0) {
+        device_rescan();
+        if (s_file_count <= 0) return ESP_ERR_NOT_FOUND;
+    }
+    if (idx < 0 || idx >= s_file_count) return ESP_ERR_INVALID_ARG;
+
+    sd_show(idx);
+    device_set_last_msg("显示 [%d] %s", idx, s_files[idx].name);
+    return ESP_OK;
+}
+
+/* ======== main.c :: device_save_and_show ======== */
+esp_err_t device_save_and_show(const char *name, const uint8_t *data, size_t len)
+{
+    if (!sdcard_is_mounted() && sdcard_mount() != ESP_OK) {
+        ESP_LOGE(TAG, "TF 卡没挂上");
+        return ESP_FAIL;
+    }
+    if (sdcard_ensure_dir(IMAGE_DIR) != ESP_OK) return ESP_FAIL;
+
+    char path[SDCARD_NAME_MAX + 32];
+    snprintf(path, sizeof(path), "%s/%s", IMAGE_DIR, name);
+
+    const int64_t t0 = esp_timer_get_time();
+    FILE *f = fopen(path, "wb");
+    if (f == NULL) {
+        ESP_LOGE(TAG, "打不开 %s", path);
+        return ESP_FAIL;
+    }
+    const size_t w = fwrite(data, 1, len, f);
+    fclose(f);
+    if (w != len) {
+        ESP_LOGE(TAG, "只写了 %u/%u 字节", (unsigned)w, (unsigned)len);
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "落盘 %s（%u 字节，%lld ms）", name, (unsigned)len,
+             (esp_timer_get_time() - t0) / 1000);
+
+    device_rescan();
+    int idx = -1;
+    for (int i = 0; i < s_file_count; i++) {
+        if (strcmp(s_files[i].name, name) == 0) { idx = i; break; }
+    }
+    if (idx < 0) {
+        ESP_LOGW(TAG, "存好了但列表里找不到 %s", name);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    sd_show(idx);
+    device_set_last_msg("已保存并显示 %s", name);
+    return ESP_OK;
+}
+
+/* ======== image.c :: image_recv_serial ======== */
+esp_err_t image_recv_serial(uint8_t *fb, size_t len)
+{
+    ESP_LOGI(TAG, "等串口送 %u 字节索引图 + 4 字节 CRC32", (unsigned)len);
+
+    image_drain_input(250);
+    printf("开始发送数据\n");
+    fflush(stdout);
+
+    esp_err_t err = read_exact(fb, len);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    uint8_t tail[4];
+    err = read_exact(tail, sizeof(tail));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "CRC 没收到");
+        return err;
+    }
+
+    const uint32_t want = (uint32_t)tail[0] | ((uint32_t)tail[1] << 8) |
+                          ((uint32_t)tail[2] << 16) | ((uint32_t)tail[3] << 24);
+    const uint32_t have = esp_crc32_le(0, fb, (uint32_t)len);
+    if (want != have) {
+        ESP_LOGE(TAG, "CRC 不匹配：收到 0x%08lX，算得 0x%08lX —— 传输掉字节了",
+                 (unsigned long)want, (unsigned long)have);
+        return ESP_ERR_INVALID_CRC;
+    }
+
+    ESP_LOGI(TAG, "收到 %u 字节，CRC 0x%08lX 通过", (unsigned)len, (unsigned long)have);
+    return ESP_OK;
+}
+
+/* ======== image.c :: image_recv_file ======== */
+esp_err_t image_recv_file(const char *dir, char *out_path, size_t out_path_len)
+{
+    uint8_t hdr[3 + 1 + 255 + 4 + 4];
+    uint8_t fixed[8];   /* name_len 单独读，方便后面定长读 */
+
+    ESP_LOGI(TAG, "等文件头：\"EPF\" + 名字长度(1) + 名字 + 大小(4) + CRC32(4)");
+
+    image_drain_input(250);
+    printf("开始发送头部\n");
+    fflush(stdout);
+
+    esp_err_t err = read_exact(hdr, 4);   /* magic(3) + name_len(1) */
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (hdr[0] != 'E' || hdr[1] != 'P' || hdr[2] != 'F') {
+        ESP_LOGE(TAG, "magic 不对（%02X %02X %02X），应该是 \"EPF\"", hdr[0], hdr[1], hdr[2]);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const size_t name_len = hdr[3];
+    if (name_len == 0 || name_len > 200) {
+        ESP_LOGE(TAG, "文件名长度 %u 不合理", (unsigned)name_len);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char name[201];
+    err = read_exact((uint8_t *)name, name_len);
+    if (err != ESP_OK) {
+        return err;
+    }
+    name[name_len] = '\0';
+
+    /* 文件名里不允许出现路径分隔符，避免写到别处 */
+    if (strchr(name, '/') != NULL || strchr(name, '\\') != NULL) {
+        ESP_LOGE(TAG, "文件名里有路径分隔符，拒绝: %s", name);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = read_exact(fixed, 8);
+    if (err != ESP_OK) {
+        return err;
+    }
+    const uint32_t size = (uint32_t)fixed[0] | ((uint32_t)fixed[1] << 8) |
+                          ((uint32_t)fixed[2] << 16) | ((uint32_t)fixed[3] << 24);
+    const uint32_t want_crc = (uint32_t)fixed[4] | ((uint32_t)fixed[5] << 8) |
+                              ((uint32_t)fixed[6] << 16) | ((uint32_t)fixed[7] << 24);
+
+    if (size == 0 || size > RECV_FILE_MAX) {
+        ESP_LOGE(TAG, "文件大小 %u 不合理（上限 %d）", (unsigned)size, RECV_FILE_MAX);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    char path[256];
+    snprintf(path, sizeof(path), "%s/%s", dir, name);
+
+    ESP_LOGI(TAG, "准备收 %s（%u 字节，CRC 0x%08lX）", name,
+             (unsigned)size, (unsigned long)want_crc);
+
+    /* 先整份收进 PSRAM，最后再落盘。
+     *
+     * 为什么不能边收边写：写 SD 卡会阻塞几十毫秒，而 115200 下每 87 µs
+     * 就来一个字节 —— UART 收不上来就溢出丢字节（上一版就是这么失败的：
+     * "只收到 5186/18230 字节"）。缓存到 PSRAM 后接收循环只剩 memcpy，
+     * 速度远超波特率，就不会丢了。 */
+    uint8_t *buf = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (buf == NULL) {
+        buf = malloc(size);
+    }
+    if (buf == NULL) {
+        ESP_LOGE(TAG, "分配 %u 字节缓冲失败", (unsigned)size);
+        return ESP_ERR_NO_MEM;
+    }
+
+    /* ⚠️ 这句必须在 malloc **之后**再喊。
+     * 之前放在 malloc 前，服务器看到这句就开始发数据，而板子还在分配
+     * 34 万字节的 PSRAM —— 那个窗口里 UART 缓冲被冲爆，开头丢几个字节，
+     * 整段数据就错位了（实测：长度对、CRC 对不上，而且两次结果一模一样，
+     * 说明不是随机噪声而是固定窗口）。 */
+    image_drain_input(100);
+    printf("开始发送数据\n");
+    fflush(stdout);
+
+    const int64_t t0 = esp_timer_get_time();
+    esp_err_t err2 = read_exact(buf, size);
+    const int64_t recv_ms = (esp_timer_get_time() - t0) / 1000;
+    if (err2 != ESP_OK) {
+        free(buf);
+        ESP_LOGE(TAG, "接收失败（%lld ms 后）", (long long)recv_ms);
+        return err2;
+    }
+    ESP_LOGI(TAG, "收完 %u 字节，用时 %lld ms，开始落盘", (unsigned)size,
+             (long long)recv_ms);
+
+    const uint32_t crc = esp_crc32_le(0, buf, size);
+    if (crc != want_crc) {
+        ESP_LOGE(TAG, "CRC 不匹配：收到 0x%08lX，算得 0x%08lX",
+                 (unsigned long)want_crc, (unsigned long)crc);
+        free(buf);
+        return ESP_ERR_INVALID_CRC;
+    }
+
+    FILE *fp = fopen(path, "wb");
+    if (fp == NULL) {
+        ESP_LOGE(TAG, "创建 %s 失败。若是中文/长文件名，检查 CONFIG_FATFS_LFN_HEAP 是否打开"
+                      "（本工程默认已开）；也检查 SFN 非法字符 : * ? \" < > |",
+                 path);
+        free(buf);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    esp_err_t werr = ESP_OK;
+    size_t written = 0;
+    while (written < size) {
+        size_t n = size - written;
+        if (n > 64 * 1024) {
+            n = 64 * 1024;
+        }
+        if (fwrite(buf + written, 1, n, fp) != n) {
+            ESP_LOGE(TAG, "写盘失败（卡满了吗？）");
+            werr = ESP_FAIL;
+            break;
+        }
+        written += n;
+    }
+    fclose(fp);
+    free(buf);
+
+    if (werr != ESP_OK) {
+        remove(path);
+        return err;
+    }
+
+    ESP_LOGI(TAG, "文件保存完成 %s（%u 字节，接收 %lld ms）", path, (unsigned)size,
+             (long long)recv_ms);
+    if (out_path != NULL && out_path_len > 0) {
+        strlcpy(out_path, path, out_path_len);
+    }
+    return ESP_OK;
+}
+

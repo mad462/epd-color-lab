@@ -94,6 +94,7 @@ static esp_err_t display_qual(const uint8_t *index8)
     }
 
     ESP_LOGI(TAG, "0) full_clear");
+    device_set_phase("refresh1", 8);
     esp_err_t e = epd370_wave(wf_full_clear, WF_LEN);
     if (e != ESP_OK) return e;
     (void)epd370_fill(0x00);
@@ -101,15 +102,18 @@ static esp_err_t display_qual(const uint8_t *index8)
     if (e != ESP_OK) return e;
 
     ESP_LOGI(TAG, "1) qual_phase1 + 高 3bit 平面");
+    device_set_phase("refresh2", 30);
     e = epd370_wave(wf_qual_phase1, WF_LEN);       if (e != ESP_OK) return e;
     e = epd370_write_index_plane(index8, 0);       if (e != ESP_OK) return e;
     e = epd370_refresh(true, false);               if (e != ESP_OK) return e;
 
     ESP_LOGI(TAG, "2) qual_phase2（复用 RAM，不重传图）");
+    device_set_phase("refresh3", 62);
     e = epd370_wave(wf_qual_phase2, WF_LEN);       if (e != ESP_OK) return e;
     e = epd370_refresh(false, false);              if (e != ESP_OK) return e;
 
     ESP_LOGI(TAG, "3) qual_phase3 + 低 3bit 平面");
+    device_set_phase("refresh3", 92);
     e = epd370_wave(wf_qual_phase3, WF_LEN);       if (e != ESP_OK) return e;
     e = epd370_write_index_plane(index8, 1);       if (e != ESP_OK) return e;
     e = epd370_refresh(false, true);               if (e != ESP_OK) return e;
@@ -192,38 +196,6 @@ static void step3_index_card(void)
     }
 }
 
-/* 从串口收一张 8bpp 索引图并显示 */
-static void recv_and_display(bool use_fast)
-{
-    if (s_index == NULL) {
-        ESP_LOGE(TAG, "索引缓冲没分配");
-        return;
-    }
-
-    const size_t len = (size_t)EPD370_WIDTH * EPD370_HEIGHT;
-
-    /* 没初始化过就先初始化：不然写波形会被 ESP_ERR_INVALID_STATE 拒掉 */
-    if (!epd370_is_ready()) {
-        ESP_LOGW(TAG, "还没初始化，先跑一遍 init");
-        if (epd370_init() != ESP_OK) {
-            ESP_LOGE(TAG, "初始化失败，放弃");
-            return;
-        }
-    }
-
-    ESP_LOGI(TAG, "=== 收图（%u 字节）-> %s ===", (unsigned)len,
-             use_fast ? "ColorFast 2 相" : "ColorQual 3 相");
-
-    if (image_recv_serial(s_index, len) != ESP_OK) {
-        ESP_LOGE(TAG, "收图失败");
-        return;
-    }
-
-    const esp_err_t e = use_fast ? display_fast(s_index) : display_qual(s_index);
-    if (e != ESP_OK) {
-        ESP_LOGE(TAG, "显示失败: %s", esp_err_to_name(e));
-    }
-}
 
 /* ------------------------------------------------------ TF 卡上的 BMP 浏览 */
 
@@ -235,182 +207,15 @@ static int s_file_count;
 static int s_file_index;
 static bmp_rot_t s_rot = BMP_ROT_CW;   /* 竖版 BMP 的旋转方向 */
 
-static const char *rot_name(bmp_rot_t r)
-{
-    return (r == BMP_ROT_CCW) ? "逆时针" : "顺时针";
-}
 
-/* 打印一张图的参数：大小 / BMP 尺寸 / 位深 / 颜色表项数。
- * 服务器靠这行给网页填列表，格式尽量稳定：
- *   [ 0] name.bmp  345910 B  480x720  8bpp  64色
- *   [ 1] bad.bmp   1234 B    (不是可用的 BMP)      */
-static void sd_print_entry(int i)
-{
-    char path[SDCARD_NAME_MAX + 32];
-    snprintf(path, sizeof(path), "%s/%s", IMAGE_DIR, s_files[i].name);
 
-    struct stat st;
-    const long size = (stat(path, &st) == 0) ? (long)st.st_size : -1;
 
-    bmp_info_t info;
-    if (bmp_read_info(path, &info) == ESP_OK) {
-        printf("  [%2d] %s  %ld B  %dx%d  %ubpp  %u色\n",
-               i, s_files[i].name, size, info.width, info.height,
-               (unsigned)info.bit_depth, (unsigned)info.palette_colors);
-    } else {
-        printf("  [%2d] %s  %ld B  (不是可用的 BMP)\n", i, s_files[i].name, size);
-    }
-    fflush(stdout);
-}
 
-static void sd_scan(void)
-{
-    if (!sdcard_is_mounted() && sdcard_mount() != ESP_OK) {
-        printf("TF 卡没挂上（卡插了吗？）\n");
-        fflush(stdout);
-        return;
-    }
-
-    (void)sdcard_ensure_dir(IMAGE_DIR);
-    s_file_count = sdcard_scan_dir(IMAGE_DIR, ".bmp", s_files, SDCARD_MAX_ENTRIES);
-    s_file_index = 0;
-
-    printf("\n%s 里找到 %d 张 BMP：\n", IMAGE_DIR, s_file_count);
-    for (int i = 0; i < s_file_count; i++) {
-        sd_print_entry(i);
-    }
-    printf("按 'j' 输编号跳转，'n'/'p' 翻页，'d' 重显，'r' 换旋转方向\n");
-    fflush(stdout);
-}
-
-/* 显示第 idx 张（越界会绕回） */
-static void sd_show(int idx)
-{
-    if (s_file_count <= 0) {
-        printf("还没有图片列表，先按 'l' 扫描 TF 卡\n");
-        fflush(stdout);
-        return;
-    }
-    if (idx < 0) {
-        idx = s_file_count - 1;
-    }
-    if (idx >= s_file_count) {
-        idx = 0;
-    }
-    s_file_index = idx;
-
-    char path[SDCARD_NAME_MAX + 32];
-    snprintf(path, sizeof(path), "%s/%s", IMAGE_DIR, s_files[idx].name);
-
-    if (s_index == NULL) {
-        return;
-    }
-
-    ESP_LOGI(TAG, "[%d/%d] 读 %s", idx + 1, s_file_count, s_files[idx].name);
-    if (bmp_load_index8(path, s_index, EPD370_WIDTH, EPD370_HEIGHT, s_rot) != ESP_OK) {
-        return;
-    }
-
-    if (!epd370_is_ready() && epd370_init() != ESP_OK) {
-        ESP_LOGE(TAG, "初始化失败");
-        return;
-    }
-
-    /* BMP 自带颜色表 —— 拿它和我们的两张色板比，判断用户选的是哪张，
-     * 从而决定走 ColorQual 3 相还是 ColorFast 2 相。 */
-    const int match_qual = bmp_count_palette_match(path, palette_qual, PALETTE_ENTRIES);
-    const int match_fast = bmp_count_palette_match(path, palette_fast, PALETTE_ENTRIES);
-    const bool use_fast = match_fast > match_qual;
-
-    ESP_LOGI(TAG, "色板匹配：ColorQual %d / 64，ColorFast %d / 64 -> 走 %s",
-             match_qual, match_fast, use_fast ? "ColorFast 2 相" : "ColorQual 3 相");
-    if (match_qual < 32 && match_fast < 32) {
-        ESP_LOGW(TAG, "两张都不太匹配 —— 导出时可能没选 48 色色板，颜色会不对");
-    }
-
-    const esp_err_t e = use_fast ? display_fast(s_index) : display_qual(s_index);
-
-    /* 显示这十几秒里按的键全部丢掉 —— 免得网页连点导致连刷好几张 */
-    image_drain_input(200);
-
-    if (e != ESP_OK) {
-        ESP_LOGE(TAG, "显示失败: %s", esp_err_to_name(e));
-    }
-}
-
-/* 从串口收一个文件存到 TF 卡，然后直接显示它 */
-static void recv_file_to_sd(void)
-{
-    if (!sdcard_is_mounted() && sdcard_mount() != ESP_OK) {
-        ESP_LOGE(TAG, "TF 卡没挂上，收不了文件");
-        return;
-    }
-
-    char path[256];
-    if (image_recv_file(IMAGE_DIR, path, sizeof(path)) != ESP_OK) {
-        ESP_LOGE(TAG, "收文件失败");
-        return;
-    }
-
-    /* 存完顺手显示 —— 重扫一次列表，让新文件进目录 */
-    s_file_count = sdcard_scan_dir(IMAGE_DIR, ".bmp", s_files, SDCARD_MAX_ENTRIES);
-    s_file_index = 0;
-    const char *base = strrchr(path, '/');
-    base = base ? base + 1 : path;
-    for (int i = 0; i < s_file_count; i++) {
-        if (strcasecmp(s_files[i].name, base) == 0) {
-            sd_show(i);
-            return;
-        }
-    }
-
-    ESP_LOGW(TAG, "存好了但没在 .bmp 列表里找到 %s（不是 .bmp？）", base);
-}
 
 /* -------------------------------------------------------- 按编号跳转（'j'）
  * 网页要能点列表里的图直接显示，所以固件得支持"输编号 -> 显示第 N 张"。
  */
-static bool s_jump_mode;
-static char s_jump_digits[6];
-static int  s_jump_len;
 
-static bool jump_input(int c)
-{
-    if (c >= '0' && c <= '9') {
-        if (s_jump_len < 5) {
-            s_jump_digits[s_jump_len++] = (char)c;
-        }
-        return true;
-    }
-
-    if (c == '\n' || c == '\r') {
-        if (s_jump_len > 0) {
-            char tmp[8];
-            memcpy(tmp, s_jump_digits, (size_t)s_jump_len);
-            tmp[s_jump_len] = '\0';
-            s_jump_len = 0;
-
-            const int want = atoi(tmp);
-            if (want >= 1 && want <= s_file_count) {
-                s_jump_mode = false;
-                sd_show(want - 1);
-            } else {
-                printf("编号超出范围 1~%d\n", s_file_count);
-                fflush(stdout);
-            }
-        }
-        return true;
-    }
-
-    if (c == 27 || c == 'x') {   /* ESC */
-        s_jump_mode = false;
-        printf("取消跳转\n");
-        fflush(stdout);
-        return true;
-    }
-
-    return true;   /* 跳转模式里其它键一律忽略 */
-}
 
 /* ---------------------------------------------------------------- 校准模式
  *
@@ -574,12 +379,7 @@ static bool cal_input(int c)
             cal_exit();
             return true;
 
-        /* 传图/看图命令：退出校准，交给普通分支执行 */
-        case 'u':
-        case 'w':
-        case 'l':
-        case 'd':
-        case 'j':
+        /* 问设备信息：退出校准，交给普通分支执行 */
         case 'e':
             printf("（自动退出校准）\n");
             fflush(stdout);
@@ -599,13 +399,6 @@ static void print_help(void)
            "  2  第2步：full_clear 波形 + 全0帧 + 刷新（全屏应变黑）\n"
            "  3  第3步：索引卡 64 格 + ColorQual 3 相（判玻璃匹配）\n"
            "  c  进入校准模式（逐个刷满屏，打实测用）\n"
-           "  l  扫描 TF 卡 " IMAGE_DIR " 下的 .bmp（带大小/尺寸/色数）\n"
-           "  j  输编号跳转到某张图\n"
-           "  n  下一张     p  上一张     d  重显当前张\n"
-           "  r  切换竖版 BMP 的旋转方向（顺时针/逆时针）\n"
-           "  w  串口收一个文件存到 TF 卡并显示（host/send_file.py）\n"
-           "  u  串口收一张 8bpp 索引图并用 ColorQual 3 相显示\n"
-           "  f  同上但用 ColorFast 2 相\n"
            "  k  只写 full_clear 波形不刷新（诊断）\n"
            "  e  设备信息：WiFi 状态 / IP / 传图地址 / 文件数\n"
            "  i  重新初始化\n"
@@ -623,13 +416,8 @@ static void cli_loop(void)
             continue;
         }
 
-        /* 校准模式优先吃掉输入；传图命令会被放行给下面的普通分支 */
+        /* 校准模式优先吃掉输入；问设备信息会被放行给下面的普通分支 */
         if (s_cal_mode && cal_input(c)) {
-            continue;
-        }
-
-        /* 跳转模式（按编号选图）同理 */
-        if (s_jump_mode && jump_input(c)) {
             continue;
         }
 
@@ -640,32 +428,6 @@ static void cli_loop(void)
             case 'c':
                 cal_enter();
                 break;
-            case 'l': sd_scan();           break;
-            case 'j':
-                if (s_file_count <= 0) {
-                    sd_scan();          /* 还没扫过就先扫一遍 */
-                }
-                if (s_file_count > 0) {
-                    s_jump_mode = true;
-                    s_jump_len = 0;
-                    printf("输编号 1~%d 然后回车（ESC 取消）\n", s_file_count);
-                    fflush(stdout);
-                }
-                break;
-            case 'n': if (s_file_count > 0) sd_show(s_file_index + 1); break;
-            case 'p': if (s_file_count > 0) sd_show(s_file_index - 1); break;
-            case 'd': sd_show(s_file_index); break;
-            case 'r':
-                s_rot = (s_rot == BMP_ROT_CW) ? BMP_ROT_CCW : BMP_ROT_CW;
-                printf("旋转方向改成 %s，重显当前张\n", rot_name(s_rot));
-                fflush(stdout);
-                if (s_file_count > 0) {
-                    sd_show(s_file_index);
-                }
-                break;
-            case 'u': recv_and_display(false); break;
-            case 'f': recv_and_display(true);  break;
-            case 'w': recv_file_to_sd();       break;
             case 'k': step_wave_only();    break;
             case 'e': {
                 /* 问设备要信息 —— 尤其是 IP（网页传图要用） */
@@ -742,60 +504,20 @@ void device_set_last_msg(const char *fmt, ...)
 const char *device_last_msg(void) { return s_last_msg; }
 int device_count(void) { return s_file_count; }
 
-/* 扫一遍卡，只更新内部列表 */
-static int device_rescan(void)
+/* ---------------- 进度上报 ---------------- */
+static volatile int s_progress = -1;
+static char s_phase[16] = "idle";
+
+void device_set_phase(const char *phase, int progress)
 {
-    if (!sdcard_is_mounted() && sdcard_mount() != ESP_OK) {
-        s_file_count = 0;
-        return 0;
-    }
-    (void)sdcard_ensure_dir(IMAGE_DIR);
-    s_file_count = sdcard_scan_dir(IMAGE_DIR, ".bmp", s_files, SDCARD_MAX_ENTRIES);
-    return s_file_count;
+    snprintf(s_phase, sizeof(s_phase), "%s", phase);
+    s_progress = progress;
 }
+const char *device_phase(void) { return s_phase; }
+int device_progress(void) { return s_progress; }
 
-int device_scan(device_file_t *out, int max)
-{
-    const int total = device_rescan();
-    if (out == NULL) return total;
 
-    int n = 0;
-    for (int i = 0; i < total && n < max; i++) {
-        device_file_t *d = &out[n];
-        memset(d, 0, sizeof(*d));
-        snprintf(d->name, sizeof(d->name), "%s", s_files[i].name);
 
-        char path[SDCARD_NAME_MAX + 32];
-        snprintf(path, sizeof(path), "%s/%s", IMAGE_DIR, s_files[i].name);
-
-        struct stat st;
-        d->size = (stat(path, &st) == 0) ? (long)st.st_size : -1;
-
-        bmp_info_t info;
-        if (bmp_read_info(path, &info) == ESP_OK) {
-            d->is_bmp = true;
-            d->w = info.width;
-            d->h = info.height;
-            d->bpp = (int)info.bit_depth;
-            d->colors = (int)info.palette_colors;
-        }
-        n++;
-    }
-    return n;
-}
-
-esp_err_t device_show(int idx)
-{
-    if (s_file_count <= 0) {
-        device_rescan();
-        if (s_file_count <= 0) return ESP_ERR_NOT_FOUND;
-    }
-    if (idx < 0 || idx >= s_file_count) return ESP_ERR_INVALID_ARG;
-
-    sd_show(idx);
-    device_set_last_msg("显示 [%d] %s", idx, s_files[idx].name);
-    return ESP_OK;
-}
 
 esp_err_t device_show_raw(const uint8_t *idx, size_t len)
 {
@@ -820,46 +542,6 @@ esp_err_t device_show_raw(const uint8_t *idx, size_t len)
     return e;
 }
 
-esp_err_t device_save_and_show(const char *name, const uint8_t *data, size_t len)
-{
-    if (!sdcard_is_mounted() && sdcard_mount() != ESP_OK) {
-        ESP_LOGE(TAG, "TF 卡没挂上");
-        return ESP_FAIL;
-    }
-    if (sdcard_ensure_dir(IMAGE_DIR) != ESP_OK) return ESP_FAIL;
-
-    char path[SDCARD_NAME_MAX + 32];
-    snprintf(path, sizeof(path), "%s/%s", IMAGE_DIR, name);
-
-    const int64_t t0 = esp_timer_get_time();
-    FILE *f = fopen(path, "wb");
-    if (f == NULL) {
-        ESP_LOGE(TAG, "打不开 %s", path);
-        return ESP_FAIL;
-    }
-    const size_t w = fwrite(data, 1, len, f);
-    fclose(f);
-    if (w != len) {
-        ESP_LOGE(TAG, "只写了 %u/%u 字节", (unsigned)w, (unsigned)len);
-        return ESP_FAIL;
-    }
-    ESP_LOGI(TAG, "落盘 %s（%u 字节，%lld ms）", name, (unsigned)len,
-             (esp_timer_get_time() - t0) / 1000);
-
-    device_rescan();
-    int idx = -1;
-    for (int i = 0; i < s_file_count; i++) {
-        if (strcmp(s_files[i].name, name) == 0) { idx = i; break; }
-    }
-    if (idx < 0) {
-        ESP_LOGW(TAG, "存好了但列表里找不到 %s", name);
-        return ESP_ERR_NOT_FOUND;
-    }
-
-    sd_show(idx);
-    device_set_last_msg("已保存并显示 %s", name);
-    return ESP_OK;
-}
 
 void app_main(void)
 {

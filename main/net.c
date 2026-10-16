@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
 
 #include "esp_event.h"
@@ -22,6 +23,7 @@
 #include "nvs_flash.h"
 
 #include "device_api.h"
+#include "epd370.h"
 #include "net.h"
 #include "wifi_config.h"
 
@@ -30,8 +32,6 @@ static const char *TAG = "net";
 static char s_ip[20] = "0.0.0.0";
 static bool s_ready = false;
 static httpd_handle_t s_srv = NULL;
-
-#define UPLOAD_MAX (2 * 1024 * 1024)
 
 /* ---------------------------------------------------------------- 事件 */
 static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
@@ -74,188 +74,88 @@ static esp_err_t send_json(httpd_req_t *req, const char *json)
     return httpd_resp_sendstr(req, json);
 }
 
-/* 从 query 里取一个参数并做 URL 解码（文件名里可能有空格等） */
-static void url_decode(char *s)
+/* ---------------------------------------------------------------- 显示任务
+ *
+ * 为什么要有这个任务：刷屏要 15 秒，如果在 httpd 任务里**同步**跑，
+ * 那 15 秒里网页连 /status 都问不到 —— 进度就没法做。
+ * 所以 /raw 收完数据丢进队列立刻返回，实际显示交给这个任务，
+ * 网页轮询 /status 里的 phase/progress。 */
+typedef struct { uint8_t *data; size_t len; } raw_job_t;
+static QueueHandle_t s_raw_q = NULL;
+
+/* /raw 收的是 8bpp 索引 —— 一像素一字节，720*480 = 345600。
+ * 别用 EPD370_FRAME_BYTES：那是 4bpp 打包后的 172800，传错会直接被拒。 */
+#define RAW_INDEX_BYTES (720 * 480)
+
+static void display_task(void *arg)
 {
-    char *o = s;
-    for (char *p = s; *p; p++) {
-        if (*p == '%' && p[1] && p[2]) {
-            const int hi = p[1] >= 'a' ? p[1] - 'a' + 10 : (p[1] >= 'A' ? p[1] - 'A' + 10 : p[1] - '0');
-            const int lo = p[2] >= 'a' ? p[2] - 'a' + 10 : (p[2] >= 'A' ? p[2] - 'A' + 10 : p[2] - '0');
-            *o++ = (char)((hi << 4) | lo);
-            p += 2;
-        } else if (*p == '+') {
-            *o++ = ' ';
-        } else {
-            *o++ = *p;
+    (void)arg;
+    raw_job_t job;
+    for (;;) {
+        if (xQueueReceive(s_raw_q, &job, portMAX_DELAY) != pdTRUE) continue;
+
+        ESP_LOGI(TAG, "开始显示 %u 字节索引", (unsigned)job.len);
+        if (device_lock(60000)) {
+            device_show_raw(job.data, job.len);
+            device_unlock();
         }
+        free(job.data);
+        device_set_phase("idle", -1);
+        ESP_LOGI(TAG, "显示结束");
     }
-    *o = '\0';
 }
 
-static bool query_get(httpd_req_t *req, const char *key, char *out, size_t out_len)
+/* JSON 里的字符串要转义，last_msg 可能带引号 */
+static void json_escape(char *dst, size_t cap, const char *src)
 {
-    char q[256];
-    if (httpd_req_get_url_query_str(req, q, sizeof(q)) != ESP_OK) {
-        return false;
+    size_t j = 0;
+    for (const char *p = src; *p && j + 1 < cap; p++) {
+        if (*p == '"' || *p == '\\') { if (j + 2 >= cap) break; dst[j++] = '\\'; }
+        dst[j++] = *p;
     }
-    if (httpd_query_key_value(q, key, out, out_len) != ESP_OK) {
-        return false;
-    }
-    url_decode(out);
-    return true;
+    dst[j] = '\0';
 }
 
 /* ---------------------------------------------------------------- /status */
 static esp_err_t h_status(httpd_req_t *req)
 {
-    char buf[320];
+    char last[128];
+    json_escape(last, sizeof(last), device_last_msg() ? device_last_msg() : "");
+
+    char buf[400];
     snprintf(buf, sizeof(buf),
-             "{\"ok\":true,\"ip\":\"%s\",\"ready\":%s,\"files\":%d,\"last\":\"%s\"}",
+             "{\"ok\":true,\"ip\":\"%s\",\"ready\":%s,\"files\":%d,"
+             "\"phase\":\"%s\",\"progress\":%d,\"last\":\"%s\"}",
              s_ip, s_ready ? "true" : "false", device_count(),
-             device_last_msg() ? device_last_msg() : "");
+             device_phase(), device_progress(), last);
     return send_json(req, buf);
 }
 
-/* ---------------------------------------------------------------- /list */
-static esp_err_t h_list(httpd_req_t *req)
-{
-    if (!device_lock(5000)) {
-        return send_json(req, "{\"ok\":false,\"error\":\"设备忙\"}");
-    }
-
-    device_file_t *files = heap_caps_malloc(sizeof(device_file_t) * DEVICE_MAX_FILES,
-                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!files) {
-        device_unlock();
-        return send_json(req, "{\"ok\":false,\"error\":\"内存不足\"}");
-    }
-    const int n = device_scan(files, DEVICE_MAX_FILES);
-
-    /* 每个文件最多 ~200 字节 JSON，128 个够用 */
-    const size_t cap = 1024 + (size_t)n * 200;
-    char *out = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!out) {
-        free(files);
-        device_unlock();
-        return send_json(req, "{\"ok\":false,\"error\":\"内存不足\"}");
-    }
-
-    size_t used = 0;
-    used += snprintf(out + used, cap - used, "{\"ok\":true,\"files\":[");
-    for (int i = 0; i < n && used + 220 < cap; i++) {
-        char info[96];
-        if (files[i].is_bmp) {
-            snprintf(info, sizeof(info), "%dx%d  %dbpp  %" PRIu32 "色",
-                     files[i].w, files[i].h, files[i].bpp, files[i].colors);
-        } else {
-            snprintf(info, sizeof(info), "不是可用的 BMP");
-        }
-        used += snprintf(out + used, cap - used,
-                         "%s{\"index\":%d,\"name\":\"%s\",\"size\":%ld,\"info\":\"%s\"}",
-                         i ? "," : "", i, files[i].name, files[i].size, info);
-    }
-    used += snprintf(out + used, cap - used, "]}");
-
-    free(files);
-    device_unlock();
-    device_set_last_msg("读取列表 %d 张", n);
-    return send_json(req, out ? out : "{}");   /* out 在 send 之后才 free */
-}
-
-/* ---------------------------------------------------------------- /show */
-static esp_err_t h_show(httpd_req_t *req)
-{
-    char val[16];
-    if (!query_get(req, "i", val, sizeof(val))) {
-        return send_json(req, "{\"ok\":false,\"error\":\"缺少 i 参数\"}");
-    }
-    const int idx = atoi(val);
-
-    if (!device_lock(60000)) {
-        return send_json(req, "{\"ok\":false,\"error\":\"设备忙\"}");
-    }
-    const esp_err_t e = device_show(idx);
-    device_unlock();
-
-    if (e != ESP_OK) {
-        return send_json(req, "{\"ok\":false,\"error\":\"编号越界或读图失败\"}");
-    }
-    return send_json(req, "{\"ok\":true}");
-}
-
-/* ---------------------------------------------------------------- /upload */
-static esp_err_t h_upload(httpd_req_t *req)
-{
-    char name[DEVICE_NAME_MAX];
-    if (!query_get(req, "name", name, sizeof(name)) || name[0] == '\0') {
-        return send_json(req, "{\"ok\":false,\"error\":\"缺少 name 参数\"}");
-    }
-
-    const int total = req->content_len;
-    if (total <= 0 || total > UPLOAD_MAX) {
-        char b[128];
-        snprintf(b, sizeof(b), "{\"ok\":false,\"error\":\"大小不对: %d\"}", total);
-        return send_json(req, b);
-    }
-
-    ESP_LOGI(TAG, "收到上传请求：%s  %d 字节", name, total);
-    device_set_last_msg("接收 %s …", name);
-
-    uint8_t *buf = heap_caps_malloc(total, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!buf) {
-        return send_json(req, "{\"ok\":false,\"error\":\"分配缓冲失败\"}");
-    }
-
-    int got = 0;
-    while (got < total) {
-        const int r = httpd_req_recv(req, (char *)buf + got, total - got);
-        if (r == HTTPD_SOCK_ERR_TIMEOUT) {
-            continue;                    /* 超时就接着收 */
-        }
-        if (r <= 0) {
-            free(buf);
-            device_set_last_msg("接收中断（%d/%d）", got, total);
-            return send_json(req, "{\"ok\":false,\"error\":\"接收中断\"}");
-        }
-        got += r;
-    }
-    ESP_LOGI(TAG, "收完 %d 字节，开始落盘", got);
-
-    if (!device_lock(60000)) {
-        free(buf);
-        return send_json(req, "{\"ok\":false,\"error\":\"设备忙\"}");
-    }
-    const esp_err_t e = device_save_and_show(name, buf, (size_t)got);
-    device_unlock();
-    free(buf);
-
-    if (e != ESP_OK) {
-        device_set_last_msg("保存/显示失败: %s", esp_err_to_name(e));
-        return send_json(req, "{\"ok\":false,\"error\":\"保存或显示失败\"}");
-    }
-    device_set_last_msg("已显示 %s", name);
-    return send_json(req, "{\"ok\":true}");
-}
-
 /* ---------------------------------------------------------------- /raw
- * 直接显示一份 8bpp 索引数据，不落盘。对应串口的 'u'。
- * 网页的「只显示，不存卡」走这条。 */
+ * 收一份 8bpp 索引，丢给显示任务，**立刻返回**。
+ * 网页随后轮询 /status 看 phase/progress。 */
 static esp_err_t h_raw(httpd_req_t *req)
 {
     const int total = req->content_len;
-    if (total != 720 * 480) {
+    if (total != RAW_INDEX_BYTES) {
         char b[128];
         snprintf(b, sizeof(b),
                  "{\"ok\":false,\"error\":\"长度不对: %d，应该是 345600\"}", total);
         return send_json(req, b);
     }
+    if (device_progress() >= 0) {
+        return send_json(req, "{\"ok\":false,\"error\":\"设备正忙，等这次刷完\"}");
+    }
 
     ESP_LOGI(TAG, "收到原始索引 %d 字节", total);
-    device_set_last_msg("接收索引 %d 字节 …", total);
+    device_set_last_msg("接收索引 %d 字节", total);
+    device_set_phase("recv", 2);
 
     uint8_t *buf = heap_caps_malloc(total, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!buf) return send_json(req, "{\"ok\":false,\"error\":\"分配缓冲失败\"}");
+    if (!buf) {
+        device_set_phase("idle", -1);
+        return send_json(req, "{\"ok\":false,\"error\":\"分配缓冲失败\"}");
+    }
 
     int got = 0;
     while (got < total) {
@@ -263,25 +163,22 @@ static esp_err_t h_raw(httpd_req_t *req)
         if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
         if (r <= 0) {
             free(buf);
+            device_set_phase("idle", -1);
             device_set_last_msg("接收中断（%d/%d）", got, total);
             return send_json(req, "{\"ok\":false,\"error\":\"接收中断\"}");
         }
         got += r;
     }
+    ESP_LOGI(TAG, "收完 %d 字节，交给显示任务", got);
 
-    if (!device_lock(60000)) {
+    raw_job_t job = { .data = buf, .len = (size_t)got };
+    if (xQueueSend(s_raw_q, &job, 0) != pdTRUE) {
         free(buf);
-        return send_json(req, "{\"ok\":false,\"error\":\"设备忙\"}");
+        device_set_phase("idle", -1);
+        return send_json(req, "{\"ok\":false,\"error\":\"显示任务忙\"}");
     }
-    const esp_err_t e = device_show_raw(buf, (size_t)got);
-    device_unlock();
-    free(buf);
-
-    if (e != ESP_OK) {
-        device_set_last_msg("直接显示失败: %s", esp_err_to_name(e));
-        return send_json(req, "{\"ok\":false,\"error\":\"显示失败\"}");
-    }
-    return send_json(req, "{\"ok\":true}");
+    /* 立刻返回 —— 显示进度让网页去轮询 /status */
+    return send_json(req, "{\"ok\":true,\"queued\":true}");
 }
 
 /* ---------------------------------------------------------------- OPTIONS */
@@ -297,7 +194,7 @@ static esp_err_t start_http(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = 80;
-    cfg.max_uri_handlers = 12;
+    cfg.max_uri_handlers = 10;
     cfg.lru_purge_enable = true;
     cfg.stack_size = 8192;
     /* 默认 5 秒。传 345 KB 时中间可能卡顿，给足余量。 */
@@ -311,15 +208,10 @@ static esp_err_t start_http(void)
     }
 
     const httpd_uri_t uris[] = {
-        { .uri = "/status",   .method = HTTP_GET,  .handler = h_status },
-        { .uri = "/list",     .method = HTTP_GET,  .handler = h_list },
-        { .uri = "/show",     .method = HTTP_GET,  .handler = h_show },
-        { .uri = "/upload",   .method = HTTP_POST, .handler = h_upload },
-        { .uri = "/raw",      .method = HTTP_POST, .handler = h_raw },
-        { .uri = "/upload",   .method = HTTP_OPTIONS, .handler = h_options },
-        { .uri = "/raw",      .method = HTTP_OPTIONS, .handler = h_options },
-        { .uri = "/list",     .method = HTTP_OPTIONS, .handler = h_options },
-        { .uri = "/status",   .method = HTTP_OPTIONS, .handler = h_options },
+        { .uri = "/status", .method = HTTP_GET,     .handler = h_status },
+        { .uri = "/raw",    .method = HTTP_POST,    .handler = h_raw },
+        { .uri = "/status", .method = HTTP_OPTIONS, .handler = h_options },
+        { .uri = "/raw",    .method = HTTP_OPTIONS, .handler = h_options },
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         httpd_register_uri_handler(s_srv, &uris[i]);
@@ -364,6 +256,17 @@ esp_err_t net_start(void)
     ESP_ERROR_CHECK(esp_wifi_start());
 
     ESP_LOGI(TAG, "正在连 %s …", WIFI_SSID);
+
+    /* 显示任务 —— /raw 收完数据由它去刷屏，httpd 任务不阻塞 */
+    s_raw_q = xQueueCreate(2, sizeof(raw_job_t));
+    if (s_raw_q == NULL) {
+        ESP_LOGE(TAG, "显示队列创建失败");
+        return ESP_FAIL;
+    }
+    if (xTaskCreate(display_task, "display", 6144, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "显示任务创建失败");
+        return ESP_FAIL;
+    }
 
     /* HTTP 服务不用等 IP —— 起来了就能接（虽然没 IP 时访问不到） */
     return start_http();

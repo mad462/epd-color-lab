@@ -87,9 +87,7 @@
         details.adv[open] > summary::before { content: "▾ "; }
         details.adv > summary:hover { color: var(--tx); }
 
-        #statusLine { padding: 0 18px 6px; color: var(--dim); font-size: 12.5px;
-                      min-height: 19px; white-space: nowrap; overflow: hidden;
-                      text-overflow: ellipsis; }
+        #statusLine { display: none; }
 
         #dropOverlay { position: fixed; inset: 0; z-index: 999; display: none;
                        align-items: center; justify-content: center;
@@ -137,7 +135,6 @@
         <span class="spacer"></span>
         <button id="btnSend" class="primary big" disabled><i id="prog"></i><span>下发</span></button>
     </header>
-    <div id="statusLine">还没读到设备 IP —— 点「从串口读取」，或在串口里敲 e 看设备打印的地址。</div>
 
     <main>
         <!-- 列 1：原图 -->
@@ -272,13 +269,10 @@
         };
 
         const el = (id) => document.getElementById(id);
-        let lastMsg = '';
 
+        // 状态栏已经去掉了 —— 所有反馈都走临时弹窗 / 按钮本身
         function say(text, cls) {
-            lastMsg = text;
-            el('statusLine').textContent = text;
-            el('statusLine').style.color =
-                cls === 'l-err' ? 'var(--err)' : (cls === 'l-ok' ? 'var(--ok)' : 'var(--dim)');
+            console.log('[' + (cls || 'info') + '] ' + text);
         }
 
         // 临时提示条：几秒后自己消失，不会把版面撑长
@@ -877,62 +871,67 @@
         }
 
         // ======================================================== 下发
-        // 进度显示在按钮自己身上：按下后底色变暗，亮色填充从左往右长。
+        // 进度显示在按钮自己身上：底色变暗，亮色填充从左往右长。
         //
-        // 「下发」其实涵盖两个阶段，文案要分开：
-        //   ① 下发中  —— 把 345600 字节索引传到板子（约 3 秒）
-        //   ② 刷新中  —— 板子刷面板（4 个相位，约 15 秒）
+        // 两段：
+        //   ① 发索引 —— POST /raw，收完立刻返回（不阻塞 httpd）
+        //   ② 刷面板 —— 板子的显示任务在刷，网页轮询 /status 拿 phase/progress
         //
-        // /raw 是一次 POST，中途拿不到真实进度（板子要等刷完才回），
-        // 所以按时间估算、按阶段切文案。想要精确进度得让固件报状态，那要重烧。
+        // 为什么能拿到真实进度：固件把显示放到了独立任务里
+        // （之前是同步跑，刷屏那 15 秒 httpd 全卡住，连 /status 都问不到）。
+        const PHASE_TXT = {
+            recv: '接收中', refresh1: '清场', refresh2: '第 1 相',
+            refresh3: '第 2/3 相', idle: '完成',
+        };
+
         async function send() {
             if (!state.idx) return;
-            if (!wifiBase()) { say('还没填设备 IP —— 点「从串口读取」，或在串口里敲 e 看', 'l-err'); return; }
+            if (!wifiBase()) { toast('还没填设备 IP —— 点「从串口读取」', 'err', 5000); return; }
 
             const n = state.idx.length;
             const btn = el('btnSend'), prog = el('prog'), span = btn.querySelector('span');
-            const upMs = Math.max(800, (n / 115200) * 1000);   // 传输估计
-            const refreshMs = 15000;                            // 面板刷新
-            const estMs = upMs + refreshMs;
-
-            btn.disabled = true;
-            btn.classList.add('busy');
-            span.textContent = '下发中';
-            prog.style.width = '3%';
-
             const t0 = performance.now();
-            const tick = setInterval(() => {
-                const t = performance.now() - t0;
-                if (t < upMs) {
-                    span.textContent = '下发中';
-                    prog.style.width = (3 + t / upMs * 13).toFixed(1) + '%';
-                    say(`下发中… ${(t / 1000).toFixed(1)} 秒（共 ${n} 字节索引）`);
-                } else {
-                    span.textContent = '刷新中';
-                    const k = Math.min(1, (t - upMs) / refreshMs);
-                    prog.style.width = (16 + k * 77).toFixed(1) + '%';
-                    say(`面板刷新中… ${((t - upMs) / 1000).toFixed(0)} / 15 秒`
-                        + `（4 个相位，这段绕不开）`);
-                }
-            }, 150);
 
-            const r = await api('/raw', { method: 'POST', body: state.idx }, 180000);
-            clearInterval(tick);
-            const dt = ((performance.now() - t0) / 1000).toFixed(1);
+            btn.disabled = true; btn.classList.add('busy');
+            span.textContent = '下发中'; prog.style.width = '3%';
+
+            // ① 传索引 —— 板子收完就返回
+            const r = await api('/raw', { method: 'POST', body: state.idx }, 60000);
+            if (!r || !r.ok) {
+                btn.disabled = false; btn.classList.remove('busy');
+                span.textContent = '下发'; prog.style.width = '0';
+                toast('✗ 下发失败：' + ((r && (r.error || r.err)) || '设备没响应'), 'err', 6000);
+                return;
+            }
+
+            // ② 轮询真实刷新进度
+            prog.style.width = '6%';
+            span.textContent = '刷新中';
+            const deadline = performance.now() + 60000;
+            let last = '';
+            while (performance.now() < deadline) {
+                await new Promise((res) => setTimeout(res, 250));
+                const s = await api('/status', {}, 4000);
+                if (!s || !s.ok) continue;
+                if (s.last) last = s.last;
+                const p = Number(s.progress);
+                if (p < 0) break;                       // idle = 刷完了
+                prog.style.width = Math.max(6, Math.min(97, p)) + '%';
+                span.textContent = PHASE_TXT[s.phase] || '刷新中';
+            }
 
             prog.style.width = '100%';
             span.textContent = '下发';
             btn.disabled = false;
             setTimeout(() => { prog.style.width = '0'; btn.classList.remove('busy'); }, 1400);
 
-            if (r && r.ok) {
-                say(`✓ 已刷新到屏幕（全程 ${dt} 秒：下发 ${(upMs / 1000).toFixed(1)}s + 刷新 ${refreshMs / 1000}s）`, 'l-ok');
+            const dt = ((performance.now() - t0) / 1000).toFixed(1);
+            if (/失败|中断|错误/.test(last)) {
+                toast('✗ ' + last, 'err', 6000);
+            } else {
                 toast(`✓ 已刷新到屏幕（${dt} 秒）`, 'ok', 4500);
                 el('dot').classList.add('on');
                 el('status').textContent = '在线 ' + el('ipAddr').value.trim();
-            } else {
-                say('✗ 下发失败：' + ((r && (r.error || r.err)) || '设备没响应'), 'l-err');
-                toast('✗ 下发失败：' + ((r && (r.error || r.err)) || '设备没响应'), 'err', 6000);
             }
         }
         el('btnSend').addEventListener('click', () => { send().catch((e) => say('出错：' + e.message, 'l-err')); });
