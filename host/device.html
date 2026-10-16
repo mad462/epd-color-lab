@@ -67,6 +67,20 @@
         .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end;
                margin-bottom: 8px; }
         .row.tight { gap: 8px; }
+        /* 预设标签：右上角有个 × 可以删 */
+        .tags { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 3px; flex: 1 1 100%; }
+        .tag { position: relative; padding: 5px 13px 5px 11px; border-radius: 999px;
+               background: var(--panel2); border: 1px solid var(--line);
+               cursor: pointer; font-size: 12.5px; white-space: nowrap; }
+        .tag:hover { border-color: #4a5164; }
+        .tag.active { border-color: var(--acc); background: #22304d; }
+        .tag > i { position: absolute; top: -6px; right: -6px; width: 16px; height: 16px;
+                   display: flex; align-items: center; justify-content: center;
+                   background: var(--panel); border: 1px solid var(--line);
+                   border-radius: 50%; font-style: normal; font-size: 12px; line-height: 1;
+                   color: var(--dim); }
+        .tag > i:hover { background: var(--err); border-color: var(--err); color: #fff; }
+
         .row > label.opt { flex: 1 1 44%; min-width: 0; }
         .row > label.opt select { width: 100%; }
         .rg { display: flex; align-items: center; gap: 5px; }
@@ -139,7 +153,6 @@
     <main>
         <!-- 列 1：原图 -->
         <div class="card">
-            <h2>原图（裁剪后）</h2>
             <div class="view">
                 <canvas id="cvSrc" width="480" height="720"></canvas>
                 <div class="empty" id="emptyHint">
@@ -153,7 +166,6 @@
 
         <!-- 列 2：量化预览 -->
         <div class="card">
-            <h2>量化后（将下发到设备）</h2>
             <div class="view"><canvas id="cvDst" width="480" height="720"></canvas></div>
         </div>
 
@@ -192,12 +204,8 @@
 
             <div class="row tight">
                 <span style="color:var(--dim);font-size:12px;align-self:center">预设</span>
-                <button class="small preset" data-preset="std">标准</button>
-                <button class="small preset" data-preset="bright">提亮</button>
-                <button class="small preset" data-preset="vivid">浓一点</button>
-                <button class="small preset" data-preset="rescue">救高光</button>
-                <button class="small" id="btnSaveDefault"
-                        title="把当前所有参数存成下次打开的默认值">存为默认</button>
+                <button class="small" id="btnSavePreset" title="把当前参数存成一个预设">＋ 存为预设</button>
+                <div class="tags" id="presetTags"></div>
             </div>
 
             <details class="adv">
@@ -246,9 +254,6 @@
                         <input type="checkbox" id="cbPureSat"> 饱和色不抖动</label>
                 </div>
 
-                <div class="row tight">
-                    <button class="small" id="btnResetTone">全部复位</button>
-                </div>
             </details>
         </div>
     </main>
@@ -770,23 +775,65 @@
         }
 
         // ======================================================== 预设
+        /* 内置的「标准」预设 —— 按实测调出来的那套固化的。
+         * 半径 2、抖动强度 85 是很晚才定下来的，效果最好。 */
         const DEFAULTS = {
             palette: '48-color-qual-c025.act',
             dither: 'floyd-steinberg',
             size: '480x720',
             bright: -11, contrast: 0, sat: 0,
-            shadow: 0, highlight: 100, radius: 12,
-            tint: -10, lWeight: 1.2, ditherAmt: 100,
+            shadow: 0, highlight: 100, radius: 2,
+            tint: -10, lWeight: 1.2, ditherAmt: 85,
             panelMap: 0, auto: true, blackAuto: true, serpentine: true,
             chromaGuard: false, pureSat: false,
         };
 
-        const PRESETS = {
-            std: { ...DEFAULTS },
-            bright: { ...DEFAULTS, bright: -2, shadow: 40, highlight: 60 },
-            vivid: { ...DEFAULTS, sat: 30, contrast: 5 },
-            rescue: { ...DEFAULTS, highlight: 100, shadow: 25, panelMap: 55 },
-        };
+        /* 预设 = 一串「名字 + 参数」。用户可以自己加、自己删，
+         * 存在 localStorage 里，下次打开还在。
+         * 第一个永远是内置的「标准」，删不掉（否则没东西可退回）。 */
+        const PRESET_KEY = 'epd_presets_v2';
+        let presets = [];
+
+        function loadPresets() {
+            let saved = null;
+            try { saved = JSON.parse(localStorage.getItem(PRESET_KEY) || 'null'); } catch (e) { /* 忽略 */ }
+            presets = (Array.isArray(saved) && saved.length) ? saved
+                                                             : [{ name: '标准', s: { ...DEFAULTS } }];
+            if (!presets.some((p) => p.name === '标准')) {
+                presets.unshift({ name: '标准', s: { ...DEFAULTS } });
+            }
+        }
+
+        function savePresets() {
+            localStorage.setItem(PRESET_KEY, JSON.stringify(presets));
+        }
+
+        function renderTags() {
+            const box = el('presetTags');
+            box.innerHTML = '';
+            presets.forEach((p, i) => {
+                const tag = document.createElement('span');
+                tag.className = 'tag';
+                tag.textContent = p.name;
+                tag.title = '点击套用';
+                tag.addEventListener('click', () => applySettings(p.s));
+
+                if (p.name !== '标准') {          // 内置那个不给删
+                    const x = document.createElement('i');
+                    x.textContent = '×';
+                    x.title = '删除这个预设';
+                    x.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        presets.splice(i, 1);
+                        savePresets();
+                        renderTags();
+                        toast('已删除预设「' + p.name + '」', 'ok', 2000);
+                    });
+                    tag.appendChild(x);
+                }
+                box.appendChild(tag);
+            });
+        }
 
         function currentSettings() {
             return {
@@ -809,9 +856,9 @@
             if (s.size) el('selSize').value = s.size;
             setRange('rBright', s.bright ?? 0); setRange('rContrast', s.contrast ?? 0);
             setRange('rSat', s.sat ?? 0); setRange('rShadow', s.shadow ?? 0);
-            setRange('rHighlight', s.highlight ?? 0); setRange('rRadius', s.radius ?? 12);
+            setRange('rHighlight', s.highlight ?? 0); setRange('rRadius', s.radius ?? 2);
             setRange('rTint', s.tint ?? 0); setRange('rLWeight', s.lWeight ?? 1.2);
-            setRange('rDither', s.ditherAmt ?? 100); setRange('rPanelMap', s.panelMap ?? 0);
+            setRange('rDither', s.ditherAmt ?? 85); setRange('rPanelMap', s.panelMap ?? 0);
             el('cbAuto').checked = s.auto !== false;
             el('cbBlackAuto').checked = s.blackAuto !== false;
             el('cbSerpentine').checked = s.serpentine !== false;
@@ -820,14 +867,20 @@
             render();
         }
 
-        for (const b of document.querySelectorAll('button.preset')) {
-            b.addEventListener('click', () => applySettings(PRESETS[b.dataset.preset]));
-        }
-        el('btnResetTone').addEventListener('click', () => applySettings(DEFAULTS));
-        el('btnSaveDefault').addEventListener('click', () => {
-            localStorage.setItem('epd_defaults', JSON.stringify(currentSettings()));
-            say('✓ 已存为默认 —— 下次打开就是这套参数', 'l-ok');
-            toast('✓ 已存为默认', 'ok');
+        el('btnSavePreset').addEventListener('click', () => {
+            const def = '预设 ' + (presets.length + 1);
+            const name = (prompt('给这个预设起个名字：', def) || '').trim();
+            if (!name) return;
+            const at = presets.findIndex((p) => p.name === name);
+            if (at >= 0) {
+                presets[at].s = currentSettings();          // 同名就覆盖
+                toast('已更新预设「' + name + '」', 'ok');
+            } else {
+                presets.push({ name, s: currentSettings() });
+                toast('已存为预设「' + name + '」', 'ok');
+            }
+            savePresets();
+            renderTags();
         });
 
         // ======================================================== 选图
@@ -966,9 +1019,10 @@
         el('status').textContent = wifiBase() ? '在线 ' + el('ipAddr').value.trim() : '待填 IP';
         if (wifiBase()) el('dot').classList.add('on');
 
-        let savedTone = null;
-        try { savedTone = JSON.parse(localStorage.getItem('epd_defaults') || 'null'); } catch (e) { /* 忽略 */ }
-        applySettings(savedTone || DEFAULTS);
+        /* 预设：读本地存下来的；第一次打开就是内置的「标准」（按实测固化的那套） */
+        loadPresets();
+        renderTags();
+        applySettings(presets[0].s);
 
         if (!wifiBase()) {
             say('还没读到设备 IP —— 点「从串口读取」，或在串口里敲 e 看设备打印的地址。');
