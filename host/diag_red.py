@@ -228,6 +228,7 @@ def quantize(img, pal, used, lw=1.2, serp=True, chroma_guard=False, pure_sat=Fal
     K = [(1, 0, 7 / 16), (-1, 1, 3 / 16), (0, 1, 5 / 16), (1, 1, 1 / 16)]
     idx = Image.new("L", (w, h))
     ip = idx.load()
+    CLAMP = 64
     PURE_SAT = 0.5
     for y in range(h):
         rev = serp and (y & 1)
@@ -258,9 +259,11 @@ def quantize(img, pal, used, lw=1.2, serp=True, chroma_guard=False, pure_sat=Fal
             for dx, dy, f in K:
                 nx, ny = x + (dx if not rev else -dx), y + dy
                 if 0 <= nx < w and 0 <= ny < h:
-                    buf[ny][nx * 3] += er * f
-                    buf[ny][nx * 3 + 1] += eg * f
-                    buf[ny][nx * 3 + 2] += eb * f
+                    o2 = nx * 3
+                    for ch, e in ((0, er), (1, eg), (2, eb)):
+                        buf[ny][o2 + ch] = max(orig[ny][o2 + ch] - CLAMP,
+                                               min(orig[ny][o2 + ch] + CLAMP,
+                                                   buf[ny][o2 + ch] + e * f))
     return idx
 
 

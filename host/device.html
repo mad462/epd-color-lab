@@ -701,10 +701,26 @@
             const work = new Float32Array(pixels.length);
             for (let i = 0; i < pixels.length; i++) work[i] = pixels[i];
             const out = new Uint8Array(w * h);
+
+            /* 误差累积上限。
+             *
+             * 为什么需要：误差扩散是**无上限累积**的。源色度超过色板上限时
+             * （色板最红的那个也到不了源色的红），误差一直推、推不出结果，
+             * 就会把整片区域推成同一个颜色 —— 饱和区变成一块死红，
+             * 内部层次全丢，边界处还会出现斑块状断层。
+             *
+             * 把每个像素的累积误差限在原始值 ±CLAMP 之内：
+             * 正常渐变（误差通常 <30）不受影响，饱和区的失控累积被截住。 */
+            const CLAMP = 64;
             const add = (x, y, dr, dg, db, f) => {
                 if (x < 0 || x >= w || y < 0 || y >= h) return;
                 const o = (y * w + x) * 4;
-                work[o] += dr * f; work[o + 1] += dg * f; work[o + 2] += db * f;
+                work[o] = Math.max(pixels[o] - CLAMP,
+                    Math.min(pixels[o] + CLAMP, work[o] + dr * f));
+                work[o + 1] = Math.max(pixels[o + 1] - CLAMP,
+                    Math.min(pixels[o + 1] + CLAMP, work[o + 1] + dg * f));
+                work[o + 2] = Math.max(pixels[o + 2] - CLAMP,
+                    Math.min(pixels[o + 2] + CLAMP, work[o + 2] + db * f));
             };
             const lw = lWeight;
             for (let y = 0; y < h; y++) {
