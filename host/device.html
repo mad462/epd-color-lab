@@ -103,6 +103,23 @@
 
         #statusLine { display: none; }
 
+        /* 配网弹窗 */
+        .mask { position: fixed; inset: 0; z-index: 1000; display: none;
+                align-items: center; justify-content: center;
+                background: rgba(8, 10, 14, .72); }
+        .mask.on { display: flex; }
+        .modal { width: 380px; max-width: 92vw; background: var(--panel);
+                 border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px;
+                 box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+        .modal h3 { margin: 0 0 4px; font-size: 15px; }
+        .modal p { margin: 0 0 14px; font-size: 12.5px; color: var(--dim); line-height: 1.5; }
+        .modal label { display: block; font-size: 12.5px; color: var(--dim); margin-bottom: 10px; }
+        .modal input { width: 100%; margin-top: 4px; }
+        .modal .acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+        .modal .acts .grow { flex: 1; }
+        .saved { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 4px; }
+        .saved > .dim { font-size: 12.5px; color: var(--dim); }
+
         #dropOverlay { position: fixed; inset: 0; z-index: 999; display: none;
                        align-items: center; justify-content: center;
                        background: rgba(20, 26, 40, .88); border: 3px dashed var(--acc);
@@ -141,14 +158,37 @@
         <h1>48色墨水屏 · 传图台</h1>
         <span class="pill"><span class="dot" id="dot"></span><span id="status">就绪</span></span>
 
-        <label class="opt" style="flex-direction:row;align-items:center;gap:6px">设备 IP
-            <input type="text" id="ipAddr" placeholder="192.168.x.x" style="width:132px">
-        </label>
-        <button class="small" id="btnProbe">从串口读取</button>
-
         <span class="spacer"></span>
+        <button class="small" id="btnWifi" title="通过串口给设备配 WiFi，并读回 IP">配网</button>
         <button id="btnSend" class="primary big" disabled><i id="prog"></i><span>下发</span></button>
     </header>
+
+    <!-- 配网弹窗 -->
+    <div class="mask" id="wifiMask">
+        <div class="modal">
+            <h3>配网</h3>
+            <p>通过串口把 WiFi 写进设备（存进 NVS，<b>固件里不含密码</b>）。
+               配完自动读一次 IP。关掉弹窗会立刻释放串口。</p>
+
+            <label>WiFi 名称（SSID）
+                <input type="text" id="wSsid" placeholder="MyWiFi" autocomplete="off">
+            </label>
+            <label>密码
+                <input type="password" id="wPass" placeholder="留空 = 开放网络" autocomplete="off">
+            </label>
+
+            <div class="saved">
+                <span class="dim">用过的（点一下填入）：</span>
+                <div class="tags" id="wifiTags" style="margin-top:8px"></div>
+            </div>
+
+            <div class="acts">
+                <button class="small grow" id="wJustIp" title="不配网，只读一次当前 IP">只读 IP</button>
+                <button class="small" id="wCancel">取消</button>
+                <button class="primary" id="wGo">配网</button>
+            </div>
+        </div>
+    </div>
 
     <main>
         <!-- 列 1：原图 -->
@@ -290,10 +330,19 @@
             toastHide = setTimeout(() => { t.className = ''; }, ms);
         }
 
-        // WiFi 直连：网页直接 POST 到设备。串口只在「从串口读取」IP 时用一次。
+        // 设备 IP 由「配网」弹窗写入并存本地；网页不直接碰串口，
+        // 串口操作全部交给本地助手 server.py（它是唯一持有串口的那个）。
+        let deviceIp = (localStorage.getItem('epd_ip') || '').trim();
+
         function wifiBase() {
-            const ip = el('ipAddr').value.trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
-            return ip ? ('http://' + ip) : '';
+            return deviceIp ? ('http://' + deviceIp) : '';
+        }
+
+        function setDeviceIp(ip) {
+            deviceIp = (ip || '').trim();
+            localStorage.setItem('epd_ip', deviceIp);
+            el('status').textContent = deviceIp ? '在线 ' + deviceIp : '待配网';
+            el('dot').classList.toggle('on', !!deviceIp);
         }
 
         async function api(path, opts = {}, timeoutMs = 300000) {
@@ -314,11 +363,11 @@
         }
 
         // 调本地助手（只用来读设备 IP）
-        async function assistant(path, timeoutMs = 40000) {
+        async function assistant(path, timeoutMs = 40000, opts = {}) {
             const ctrl = new AbortController();
             const timer = setTimeout(() => ctrl.abort(), timeoutMs);
             try {
-                const res = await fetch(path, { signal: ctrl.signal });
+                const res = await fetch(path, { ...opts, signal: ctrl.signal });
                 return await res.json();
             } catch (e) {
                 return { ok: false, err: '本地助手没响应：' + e.message };
@@ -665,7 +714,9 @@
             const fy = (palette.Lmin + 16) / 116;
             const Y = fy * fy * fy;
             const s = Y <= 0.0031308 ? 12.92 * Y : 1.055 * Math.pow(Y, 1 / 2.4) - 0.055;
-            return Math.max(0, Math.min(90, Math.round(s * 255)));
+            /* 公式给的是"最暗档对应的中性灰"，实测再往下压 2 档更好看：
+             * 暗部更沉、不会发灰。校正 2.5% 那档由 60 -> 58，用户按观感定的。 */
+            return Math.max(0, Math.min(90, Math.round(s * 255) - 2));
         }
 
         // ======================================================== 状态
@@ -984,40 +1035,128 @@
             } else {
                 toast(`✓ 已刷新到屏幕（${dt} 秒）`, 'ok', 4500);
                 el('dot').classList.add('on');
-                el('status').textContent = '在线 ' + el('ipAddr').value.trim();
+                setDeviceIp(deviceIp);
             }
         }
         el('btnSend').addEventListener('click', () => { send().catch((e) => say('出错：' + e.message, 'l-err')); });
 
-        // ======================================================== 读设备 IP
-        el('btnProbe').addEventListener('click', async () => {
-            say('正在从串口读设备 IP…（打开串口会让板子重启一次，2~3 秒后自动重连）');
-            const r = await assistant('/device');
-            if (r.ok && r.ip) {
-                el('ipAddr').value = r.ip;
-                localStorage.setItem('epd_ip', r.ip);
-                el('dot').classList.add('on');
-                el('status').textContent = '在线 ' + r.ip;
-                say('✓ 设备 IP = ' + r.ip, 'l-ok');
-                toast('✓ 设备 IP = ' + r.ip, 'ok', 4000);
-            } else {
-                say('✗ 没读到 IP。板子起来了吗？串口被别的程序占着吗？也可以直接在串口里敲 e', 'l-err');
-                toast('✗ 没读到设备 IP —— 串口被占着吗？', 'err', 6000);
+        // ======================================================== 配网弹窗
+        // 用过的 SSID / 密码存本地，变成标签，点一下填进输入框。
+        // ⚠️ 密码存在浏览器 localStorage 里 —— 这是本机工具，方便优先；
+        //    公用电脑上别勾选保存。
+        const WIFI_LIST_KEY = 'epd_wifi_list';
+
+        function loadWifiList() {
+            try { return JSON.parse(localStorage.getItem(WIFI_LIST_KEY) || '[]') || []; }
+            catch (e) { return []; }
+        }
+
+        function rememberWifi(ssid, pass) {
+            const list = loadWifiList().filter((w) => w.ssid !== ssid);
+            list.unshift({ ssid, pass });
+            localStorage.setItem(WIFI_LIST_KEY, JSON.stringify(list.slice(0, 8)));
+        }
+
+        function renderWifiTags() {
+            const box = el('wifiTags');
+            box.innerHTML = '';
+            const list = loadWifiList();
+            if (!list.length) {
+                box.innerHTML = '<span class="dim" style="font-size:12px">还没有</span>';
+                return;
             }
+            for (const w of list) {
+                const tag = document.createElement('span');
+                tag.className = 'tag';
+                tag.textContent = w.ssid;
+                tag.title = '点一下填入';
+                tag.addEventListener('click', () => {
+                    el('wSsid').value = w.ssid;
+                    el('wPass').value = w.pass || '';
+                });
+                const x = document.createElement('i');
+                x.textContent = '×';
+                x.title = '从列表里删掉（不影响设备）';
+                x.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    localStorage.setItem(WIFI_LIST_KEY, JSON.stringify(
+                        loadWifiList().filter((y) => y.ssid !== w.ssid)));
+                    renderWifiTags();
+                });
+                tag.appendChild(x);
+                box.appendChild(tag);
+            }
+        }
+
+        function openWifi() {
+            el('wSsid').value = deviceIp ? '' : '';
+            el('wPass').value = '';
+            renderWifiTags();
+            el('wifiMask').classList.add('on');
+            el('wSsid').focus();
+        }
+
+        /* 关弹窗 = 释放串口。
+         * 串口是助手里用完即关的，这里只是确保不会留着请求在跑。 */
+        function closeWifi() {
+            el('wifiMask').classList.remove('on');
+            el('wSsid').value = '';
+            el('wPass').value = '';
+        }
+
+        el('btnWifi').addEventListener('click', openWifi);
+        el('wCancel').addEventListener('click', closeWifi);
+        el('wifiMask').addEventListener('click', (e) => {
+            if (e.target === el('wifiMask')) closeWifi();
         });
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && el('wifiMask').classList.contains('on')) closeWifi();
+        });
+
+        async function runProvision(ssid, pass) {
+            const goBtn = el('wGo');
+            goBtn.disabled = true;
+            goBtn.textContent = '配网中…';
+            el('status').textContent = '配网中…';
+            el('dot').classList.remove('on');
+            say('通过本地助手配网（串口已被助手独占，用完就放）…');
+
+            const r = await assistant('/provision', 60000, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ssid, password: pass }),
+            });
+
+            goBtn.disabled = false;
+            goBtn.textContent = '配网';
+
+            if (r && r.ok && r.ip) {
+                setDeviceIp(r.ip);
+                if (ssid) rememberWifi(ssid, pass);
+                toast('✓ 配网成功，设备 IP = ' + r.ip, 'ok', 5000);
+                say('✓ 配网成功：' + r.ip);
+                closeWifi();
+            } else {
+                const why = (r && r.error) || '助手没响应';
+                toast('✗ 配网失败：' + why, 'err', 7000);
+                say('✗ 配网失败：' + why);
+                if (r && r.log && r.log.length) console.log('设备日志：\n' + r.log.join('\n'));
+            }
+        }
+
+        el('wGo').addEventListener('click', () => {
+            const ssid = el('wSsid').value.trim();
+            if (!ssid) { toast('先填 WiFi 名称', 'err', 2500); el('wSsid').focus(); return; }
+            runProvision(ssid, el('wPass').value);
+        });
+
+        el('wJustIp').addEventListener('click', () => runProvision('', ''));
 
         // ======================================================== 启动
         await loadPalettes();
         refreshButtons();
 
-        const savedIp = localStorage.getItem('epd_ip');
-        if (savedIp) el('ipAddr').value = savedIp;
-        el('ipAddr').addEventListener('change', () => {
-            localStorage.setItem('epd_ip', el('ipAddr').value.trim());
-            el('status').textContent = wifiBase() ? '在线 ' + el('ipAddr').value.trim() : '待填 IP';
-        });
-        el('status').textContent = wifiBase() ? '在线 ' + el('ipAddr').value.trim() : '待填 IP';
-        if (wifiBase()) el('dot').classList.add('on');
+        setDeviceIp(deviceIp);      /* 恢复上次记住的 IP，顺带更新状态灯 */
 
         /* 预设：读本地存下来的；第一次打开就是内置的「标准」（按实测固化的那套） */
         loadPresets();
