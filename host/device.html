@@ -173,17 +173,17 @@
             <label>WiFi 名称（SSID）
                 <input type="text" id="wSsid" placeholder="MyWiFi" autocomplete="off">
             </label>
-            <label>密码
-                <input type="password" id="wPass" placeholder="留空 = 开放网络" autocomplete="off">
+            <label>密码（明文显示，方便核对）
+                <input type="text" id="wPass" placeholder="留空 = 开放网络" autocomplete="off">
             </label>
 
-            <div class="saved">
+            <div class="saved" id="wifiSaved" hidden>
                 <span class="dim">用过的（点一下填入）：</span>
                 <div class="tags" id="wifiTags" style="margin-top:8px"></div>
             </div>
 
             <div class="acts">
-                <button class="small grow" id="wJustIp" title="不配网，只读一次当前 IP">只读 IP</button>
+                <button class="small grow" id="wJustIp" title="不配网，只读一次设备当前的 IP">读取设备IP地址</button>
                 <button class="small" id="wCancel">取消</button>
                 <button class="primary" id="wGo">配网</button>
             </div>
@@ -368,9 +368,20 @@
             const timer = setTimeout(() => ctrl.abort(), timeoutMs);
             try {
                 const res = await fetch(path, { ...opts, signal: ctrl.signal });
-                return await res.json();
+                const text = await res.text();
+                let obj;
+                try {
+                    obj = JSON.parse(text);
+                } catch (e) {
+                    obj = { ok: false, err: '助手返回的不是 JSON：' + text.slice(0, 120) };
+                }
+                if (!res.ok && !obj.error) obj.error = '助手返回 HTTP ' + res.status;
+                return obj;
             } catch (e) {
-                return { ok: false, err: '本地助手没响应：' + e.message };
+                return {
+                    ok: false,
+                    err: (e.name === 'AbortError' ? '等超时了（' + (timeoutMs / 1000) + ' 秒）' : e.message),
+                };
             } finally {
                 clearTimeout(timer);
             }
@@ -1059,12 +1070,12 @@
 
         function renderWifiTags() {
             const box = el('wifiTags');
+            const wrap = el('wifiSaved');
             box.innerHTML = '';
             const list = loadWifiList();
-            if (!list.length) {
-                box.innerHTML = '<span class="dim" style="font-size:12px">还没有</span>';
-                return;
-            }
+            /* 一条都没有就整块藏起来，别留个"还没有"占地方 */
+            wrap.hidden = list.length === 0;
+            if (!list.length) return;
             for (const w of list) {
                 const tag = document.createElement('span');
                 tag.className = 'tag';
@@ -1137,7 +1148,9 @@
                 say('✓ 配网成功：' + r.ip);
                 closeWifi();
             } else {
-                const why = (r && r.error) || '助手没响应';
+                /* 把助手的原话带出来 —— 之前只写「助手没响应」，
+                 * 真正的错因（超时 / 串口被占 / HTTP 状态）全被吞了。 */
+                const why = (r && (r.error || r.err)) || '助手没响应';
                 toast('✗ 配网失败：' + why, 'err', 7000);
                 say('✗ 配网失败：' + why);
                 if (r && r.log && r.log.length) console.log('设备日志：\n' + r.log.join('\n'));

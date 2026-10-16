@@ -149,6 +149,15 @@ class Handler(SimpleHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
 
+    def end_headers(self):
+        # 开发期间页面改得勤，别让浏览器拿旧的缓存
+        # （之前出现过"明明改了页面但行为没变"的困惑）
+        p = urlparse(self.path).path
+        if p.endswith(('.html', '.json')) or p == '/':
+            self.send_header('Cache-Control', 'no-store, must-revalidate')
+            self.send_header('Pragma', 'no-cache')
+        super().end_headers()
+
     def _json(self, obj, code=200):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
