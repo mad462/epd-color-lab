@@ -174,10 +174,13 @@
                                 <input type="number" id="rDitherNum" min="0" max="150" value="100"></span></label>
                     </div>
                     <div class="row">
+                        <label class="opt">映射到面板范围 <span class="rg">
+                                <input type="range" id="rPanelMap" min="0" max="100" value="0">
+                                <input type="number" id="rPanelMapNum" min="0" max="100" value="0"></span></label>
                         <label class="opt" style="flex-direction:row;gap:6px;align-items:center">
                             <input type="checkbox" id="cbAuto" checked> 自动色阶</label>
                         <label class="opt" style="flex-direction:row;gap:6px;align-items:center">
-                            <input type="checkbox" id="cbPanelMap"> 映射到面板范围</label>
+                            <input type="checkbox" id="cbSerpentine" checked> 蛇形扫描</label>
                         <button class="small" id="btnResetTone">全部复位</button>
                     </div>
                     <div class="hint" id="mapInfo">—</div>
@@ -312,18 +315,96 @@
          *  导致量化器分不清蓝暗和红暗 —— 那次是错的。这里是改图像，且明度是被
          * 抬升/压缩而不是压到 0，比例缩放不会把色度归零。）
          */
-        function compressToPanel(data, Lmin, Lmax) {
+        function getSaturation(r, g, b) {
+            const mx = Math.max(r, Math.max(g, b)) / 255;
+            const mn = Math.min(r, Math.min(g, b)) / 255;
+            return mx === 0 ? 0 : (mx - mn) / mx;
+        }
+
+        function smoothstep(e0, e1, x) {
+            if (e1 <= e0) return x >= e1 ? 1 : 0;
+            const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
+            return t * t * (3 - 2 * t);
+        }
+
+        /** 饱和色保护系数：0 = 全压，最高 0.85 = 几乎不压 */
+        function chromaProtection(r, g, b) {
+            return smoothstep(0.18, 0.68, getSaturation(r, g, b)) * 0.85;
+        }
+
+        /** 压完之后饱和度还够不够？不够就把 strength 降下来 */
+        function isProtectedChromaFit(srcLuma, r, g, b, srcSat) {
+            if (srcSat < 0.16) return true;
+            if (getSaturation(r, g, b) >= Math.max(0.12, srcSat * 0.72)) return true;
+            return (r * 0.2126 + g * 0.7152 + b * 0.0722) <= srcLuma + 4;
+        }
+
+        /**
+         * 把图像的明度范围压进面板能出的范围。
+         *
+         * 做法照搬 epdoptimize（Apache-2.0）。我第一版是"开关两档、全压"，
+         * 结果发灰发黄，最后关掉了 —— **错在实现，不在想法**。他们的三点关键差别：
+         *   1. strength 混合：targetL = L + (压缩后L - L) * strength（不是全压）
+         *   2. 饱和度保护：颜色越饱和，有效 strength 越小（最多减 85%）
+         *   3. 压完自检：掉太多饱和度就二分法把 strength 降下来（5 步）
+         * 另外他们**不动 a/b** —— 我上一版按 L2/L 缩色度，那会引入色偏。
+         *
+         * @param strength 0~1。0 = 关，1 = 完全压进去
+         */
+        function compressToPanel(data, w, h, palette, strength) {
+            if (strength <= 0) return false;
+            const blackL = palette.Lmin, whiteL = palette.Lmax;
+            const targetRange = whiteL - blackL;
+            if (targetRange <= 0) return false;
+
+            const BINS = 256, SCALE = BINS / 100;
+            const hist = new Uint32Array(BINS);
+            const n = w * h;
             for (let i = 0; i < data.length; i += 4) {
                 const lab = rgbToLab(data[i], data[i + 1], data[i + 2]);
-                const L = lab[0];
-                const L2 = Lmin + (L / 100) * (Lmax - Lmin);
-
-                let k = (L > 1) ? (L2 / L) : 1;
-                k = Math.max(0.5, Math.min(1.6, k));   // 极暗处别放大过头
-
-                const rgb = labToRgb(L2, lab[1] * k, lab[2] * k);
-                data[i] = rgb[0]; data[i + 1] = rgb[1]; data[i + 2] = rgb[2];
+                hist[Math.max(0, Math.min(BINS - 1, Math.round(lab[0] * SCALE)))]++;
             }
+            const pct = (p) => {
+                const target = Math.round((n - 1) * p);
+                let seen = 0;
+                for (let b = 0; b < BINS; b++) { seen += hist[b]; if (seen > target) return b / SCALE; }
+                return 100;
+            };
+            const srcBlack = pct(0.01), srcWhite = pct(0.99);
+            const srcRange = srcWhite - srcBlack;
+            if (srcRange <= 0.0001) return false;
+
+            for (let i = 0; i < data.length; i += 4) {
+                const r = data[i], g = data[i + 1], b = data[i + 2];
+                const lab = rgbToLab(r, g, b);
+                const L = lab[0], A = lab[1], B = lab[2];
+                const srcLuma = r * 0.2126 + g * 0.7152 + b * 0.0722;
+                const srcSat = getSaturation(r, g, b);
+
+                const norm = Math.max(0, Math.min(1, (L - srcBlack) / srcRange));
+                const compressedL = blackL + norm * targetRange;
+                const eff = strength * (1 - chromaProtection(r, g, b));
+                const targetL = L + (compressedL - L) * eff;
+
+                const rgb = labToRgb(targetL, A, B);
+                let nr = rgb[0], ng = rgb[1], nb = rgb[2];
+
+                if (compressedL > L && !isProtectedChromaFit(srcLuma, nr, ng, nb, srcSat)) {
+                    let lo = 0, hi = eff;
+                    nr = r; ng = g; nb = b;
+                    for (let step = 0; step < 5; step++) {
+                        const mid = (lo + hi) / 2;
+                        const cand = labToRgb(L + (compressedL - L) * mid, A, B);
+                        if (isProtectedChromaFit(srcLuma, cand[0], cand[1], cand[2], srcSat)) {
+                            lo = mid; nr = cand[0]; ng = cand[1]; nb = cand[2];
+                        } else {
+                            hi = mid;
+                        }
+                    }
+                }
+                data[i] = nr; data[i + 1] = ng; data[i + 2] = nb;
+            }
+            return true;
         }
 
         const CRC_TABLE = (() => {
@@ -549,7 +630,7 @@
         }
 
         // ======================================================== 量化
-        function quantize(pixels, w, h, palette, activeIdx, kernelName, lWeight, ditherScale) {
+        function quantize(pixels, w, h, palette, activeIdx, kernelName, lWeight, ditherScale, serpentine) {
             const colors = palette.colors;
             const kernel = KERNELS[kernelName] || [];
             const ds = (ditherScale === undefined ? 100 : ditherScale) / 100;
@@ -565,7 +646,12 @@
             };
             const lw = lWeight;
             for (let y = 0; y < h; y++) {
-                for (let x = 0; x < w; x++) {
+                /* 蛇形扫描：奇数行从右往左走，并且把核的 dx 取反。
+                 * 误差扩散的方向性伪影（斜纹/蠕虫）主要来自"每行都朝同一个方向推误差"，
+                 * 交替方向能明显打散它。 */
+                const rev = serpentine && (y & 1);
+                for (let i = 0; i < w; i++) {
+                    const x = rev ? (w - 1 - i) : i;
                     const o = (y * w + x) * 4;
                     const r = Math.max(0, Math.min(255, work[o]));
                     const g = Math.max(0, Math.min(255, work[o + 1]));
@@ -581,7 +667,9 @@
                     out[y * w + x] = best;
                     const tc = colors[best];
                     const dr = (r - tc[0]) * ds, dg = (g - tc[1]) * ds, db = (b - tc[2]) * ds;
-                    for (const [dx, dy, f] of kernel) add(x + dx, y + dy, dr, dg, db, f);
+                    for (const [kx, ky, f] of kernel) {
+                        add(x + (rev ? -kx : kx), y + ky, dr, dg, db, f);
+                    }
                 }
             }
             return out;
@@ -724,17 +812,15 @@
 
             const imageData = drawCover(cvSrc, state.img, w, h);
             const tone = applyTone(imageData.data, w, h);
-            let mapped = false;
-            if (el('cbPanelMap').checked) {
-                compressToPanel(imageData.data, palette.Lmin, palette.Lmax);
-                mapped = true;
-            }
+            const mapStrength = Number(el('rPanelMap').value) / 100;
+            const mapped = compressToPanel(imageData.data, w, h, palette, mapStrength);
             boostSaturation(imageData.data, Number(el('rSat').value), Number(el('rTint').value));
 
             const t0 = performance.now();
             const qIdx = quantize(imageData.data, w, h, palette,
                 palette.active, el('selDither').value,
-                Number(el('rLWeight').value), Number(el('rDither').value));
+                Number(el('rLWeight').value), Number(el('rDither').value),
+                el('cbSerpentine').checked);
             const ms = performance.now() - t0;
 
             // 预览按构图方向画 = 上屏后看到的方向
@@ -907,13 +993,13 @@
             render();
         }
 
-        for (const id of ['selPalette', 'selDither', 'selSize', 'cbAuto', 'cbPanelMap']) {
+        for (const id of ['selPalette', 'selDither', 'selSize', 'cbAuto', 'cbSerpentine']) {
             el(id).addEventListener('input', render);
             el(id).addEventListener('change', render);
         }
 
         /* 每个滑杆配一个数字框，两边同步 —— 滑杆只能拖个大概，精调要能直接输数值 */
-        const RANGES = ['rBright', 'rContrast', 'rSat', 'rLWeight',
+        const RANGES = ['rBright', 'rContrast', 'rSat', 'rLWeight', 'rPanelMap',
                         'rBlack', 'rShadow', 'rHighlight', 'rRadius', 'rTint', 'rDither'];
 
         /**
@@ -934,10 +1020,10 @@
 
         /* 预设：把"调参"变成"选一个"，大部分情况这就够了 */
         const PRESETS = {
-            std: { bright: 0, contrast: 0, sat: 0, shadow: 0, highlight: 0, auto: true, blackAuto: true },
-            bright: { bright: 15, contrast: 0, sat: 0, shadow: 40, highlight: 0, auto: true, blackAuto: true },
-            vivid: { bright: 0, contrast: 5, sat: 30, shadow: 0, highlight: 0, auto: true, blackAuto: true },
-            rescue: { bright: 0, contrast: 0, sat: 0, shadow: 20, highlight: 60, auto: true, blackAuto: true },
+            std: { bright: 0, contrast: 0, sat: 0, shadow: 0, highlight: 0, panelMap: 0, auto: true, blackAuto: true },
+            bright: { bright: 15, contrast: 0, sat: 0, shadow: 40, highlight: 0, panelMap: 0, auto: true, blackAuto: true },
+            vivid: { bright: 0, contrast: 5, sat: 30, shadow: 0, highlight: 0, panelMap: 0, auto: true, blackAuto: true },
+            rescue: { bright: 0, contrast: 0, sat: 0, shadow: 20, highlight: 60, panelMap: 55, auto: true, blackAuto: true },
         };
 
         function applyPreset(name) {
@@ -948,6 +1034,7 @@
             setRange('rSat', p.sat);
             setRange('rShadow', p.shadow);
             setRange('rHighlight', p.highlight);
+            setRange('rPanelMap', p.panelMap);
             el('cbAuto').checked = p.auto;
             el('cbBlackAuto').checked = p.blackAuto;
             if (!p.blackAuto) setRange('rBlack', 60);
