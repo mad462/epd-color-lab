@@ -130,15 +130,15 @@
                             <option value="none">不使用抖动</option>
                         </select></label>
                     <label class="opt">构图尺寸 <select id="selSize">
-                            <option value="720x480" selected>720 × 480（设备原生，不转）</option>
-                            <option value="480x720">480 × 720 竖版（设备自动转正）</option>
+                            <option value="720x480">720 × 480（设备原生，不转）</option>
+                            <option value="480x720" selected>480 × 720 竖版（设备自动转正）</option>
                         </select></label>
                 </div>
 
                 <div class="row">
                     <label class="opt">亮度 <span class="rg">
-                            <input type="range" id="rBright" min="-40" max="40" value="0">
-                            <input type="number" id="rBrightNum" min="-40" max="40" value="0"></span></label>
+                            <input type="range" id="rBright" min="-40" max="40" value="-11">
+                            <input type="number" id="rBrightNum" min="-40" max="40" value="-11"></span></label>
                     <label class="opt">对比度 <span class="rg">
                             <input type="range" id="rContrast" min="-40" max="40" value="0">
                             <input type="number" id="rContrastNum" min="-40" max="40" value="0"></span></label>
@@ -153,6 +153,7 @@
                     <button class="small preset" data-preset="bright">提亮</button>
                     <button class="small preset" data-preset="vivid">浓一点</button>
                     <button class="small preset" data-preset="rescue">救高光</button>
+                    <button class="small" id="btnSaveDefault" title="把当前所有参数存成下次打开的默认值">存为默认</button>
                     <span class="spacer"></span>
                     <label class="opt" style="flex-direction:row;gap:6px;align-items:center">
                         <input type="checkbox" id="cbAdv"> 高级</label>
@@ -167,8 +168,8 @@
                         <label class="opt" style="flex-direction:row;gap:6px;align-items:center;align-self:flex-end">
                             <input type="checkbox" id="cbBlackAuto" checked> 自动</label>
                         <label class="opt">色偏微调 <span class="rg">
-                                <input type="range" id="rTint" min="-20" max="20" value="0">
-                                <input type="number" id="rTintNum" min="-20" max="20" value="0"></span></label>
+                                <input type="range" id="rTint" min="-20" max="20" value="-10">
+                                <input type="number" id="rTintNum" min="-20" max="20" value="-10"></span></label>
                         <label class="opt">明度权重 <span class="rg">
                                 <input type="range" id="rLWeight" min="0.4" max="3" step="0.1" value="1.2">
                                 <input type="number" id="rLWeightNum" min="0.4" max="3" step="0.1" value="1.2"></span></label>
@@ -178,8 +179,8 @@
                                 <input type="range" id="rShadow" min="-100" max="100" value="0">
                                 <input type="number" id="rShadowNum" min="-100" max="100" value="0"></span></label>
                         <label class="opt">高光 <span class="rg">
-                                <input type="range" id="rHighlight" min="-100" max="100" value="0">
-                                <input type="number" id="rHighlightNum" min="-100" max="100" value="0"></span></label>
+                                <input type="range" id="rHighlight" min="-100" max="100" value="100">
+                                <input type="number" id="rHighlightNum" min="-100" max="100" value="100"></span></label>
                         <label class="opt">半径 <span class="rg">
                                 <input type="range" id="rRadius" min="2" max="60" value="12">
                                 <input type="number" id="rRadiusNum" min="2" max="60" value="12"></span></label>
@@ -195,6 +196,9 @@
                             <input type="checkbox" id="cbAuto" checked> 自动色阶</label>
                         <label class="opt" style="flex-direction:row;gap:6px;align-items:center">
                             <input type="checkbox" id="cbSerpentine" checked> 蛇形扫描</label>
+                        <label class="opt" style="flex-direction:row;gap:6px;align-items:center"
+                               title="源色越饱和，越优先保色相而不是保明暗。红唇、红花这类小面积饱和色不会塌成灰">
+                            <input type="checkbox" id="cbChromaGuard" checked> 饱和色保色相</label>
                         <button class="small" id="btnResetTone">全部复位</button>
                     </div>
                     <div class="hint" id="mapInfo">—</div>
@@ -676,7 +680,7 @@
         }
 
         // ======================================================== 量化
-        function quantize(pixels, w, h, palette, activeIdx, kernelName, lWeight, ditherScale, serpentine) {
+        function quantize(pixels, w, h, palette, activeIdx, kernelName, lWeight, ditherScale, serpentine, chromaGuard) {
             const colors = palette.colors;
             const kernel = KERNELS[kernelName] || [];
             const ds = (ditherScale === undefined ? 100 : ditherScale) / 100;
@@ -702,11 +706,24 @@
                     const r = Math.max(0, Math.min(255, work[o]));
                     const g = Math.max(0, Math.min(255, work[o + 1]));
                     const b = Math.max(0, Math.min(255, work[o + 2]));
+
+                    /* 饱和色保色相：源色越饱和，明度权重压得越低。
+                     *
+                     * 为什么需要：色板的红色族最亮只到 L*46，而鲜明红唇在 L*50 以上。
+                     * 明度权重 1.2 会让量化器去挑"L* 接近"的档位，而那附近没有红色
+                     * （只有灰/橄榄）—— 结果红唇变成灰的，看起来就是"鲜红变暗红"。
+                     *
+                     * 对饱和像素把明度权重降下来，它就会宁可牺牲一点明暗也要选红色。
+                     * epdoptimize 的 colorMatching:"chroma" 是同一个思路。 */
+                    const effW = chromaGuard
+                        ? lw * (1 - 0.7 * getSaturation(r | 0, g | 0, b | 0))
+                        : lw;
+
                     const [L, A, B] = rgbToLab(r | 0, g | 0, b | 0);
                     let best = list[0], bestD = Infinity;
                     for (let k = 0; k < list.length; k++) {
                         const lab = labList[k];
-                        const dL = (L - lab[0]) * lw, dA = A - lab[1], dB = B - lab[2];
+                        const dL = (L - lab[0]) * effW, dA = A - lab[1], dB = B - lab[2];
                         const d = dL * dL + dA * dA + dB * dB;
                         if (d < bestD) { bestD = d; best = list[k]; }
                     }
@@ -866,7 +883,7 @@
             const qIdx = quantize(imageData.data, w, h, palette,
                 palette.active, el('selDither').value,
                 Number(el('rLWeight').value), Number(el('rDither').value),
-                el('cbSerpentine').checked);
+                el('cbSerpentine').checked, el('cbChromaGuard').checked);
             const ms = performance.now() - t0;
 
             // 预览按构图方向画 = 上屏后看到的方向
@@ -1039,7 +1056,7 @@
             render();
         }
 
-        for (const id of ['selPalette', 'selDither', 'selSize', 'cbAuto', 'cbSerpentine']) {
+        for (const id of ['selPalette', 'selDither', 'selSize', 'cbAuto', 'cbSerpentine', 'cbChromaGuard']) {
             el(id).addEventListener('input', render);
             el(id).addEventListener('change', render);
         }
@@ -1064,26 +1081,94 @@
             return Math.max(0, Math.min(90, Math.round(s * 255)));
         }
 
-        /* 预设：把"调参"变成"选一个"，大部分情况这就够了 */
+        /* 预设：默认值就是实测调出来的一套（见 docs/调色迭代记录.md） */
+        const DEFAULTS = {
+            palette: '48-color-qual-dc.act',   /* ★ 去污染（物理边界校正版） */
+            dither: 'floyd-steinberg',
+            size: '480x720',
+            bright: -11, contrast: 0, sat: 0,
+            shadow: 0, highlight: 100, radius: 12,
+            tint: -10, lWeight: 1.2, ditherAmt: 100,
+            panelMap: 0, auto: true, blackAuto: true, serpentine: true, chromaGuard: true,
+        };
+
         const PRESETS = {
-            std: { bright: 0, contrast: 0, sat: 0, shadow: 0, highlight: 0, panelMap: 0, auto: true, blackAuto: true },
-            bright: { bright: 15, contrast: 0, sat: 0, shadow: 40, highlight: 0, panelMap: 0, auto: true, blackAuto: true },
-            vivid: { bright: 0, contrast: 5, sat: 30, shadow: 0, highlight: 0, panelMap: 0, auto: true, blackAuto: true },
-            rescue: { bright: 0, contrast: 0, sat: 0, shadow: 20, highlight: 60, panelMap: 55, auto: true, blackAuto: true },
+            /* 标准 = 实测调好的那套 */
+            std: { ...DEFAULTS },
+            /* 提亮：暗部看不清时用 */
+            bright: { ...DEFAULTS, bright: -2, saturation: 0, shadow: 40, highlight: 60 },
+            /* 浓一点：颜色发闷时用 */
+            vivid: { ...DEFAULTS, sat: 30, contrast: 5 },
+            /* 救高光：大片死白时用 */
+            rescue: { ...DEFAULTS, highlight: 100, shadow: 25, panelMap: 55 },
         };
 
         function applyPreset(name) {
             const p = PRESETS[name];
             if (!p) return;
+            el('selDither').value = p.dither;
+            el('selSize').value = p.size;
             setRange('rBright', p.bright);
             setRange('rContrast', p.contrast);
             setRange('rSat', p.sat);
             setRange('rShadow', p.shadow);
             setRange('rHighlight', p.highlight);
+            setRange('rRadius', p.radius);
+            setRange('rTint', p.tint);
+            setRange('rLWeight', p.lWeight);
+            setRange('rDither', p.ditherAmt);
             setRange('rPanelMap', p.panelMap);
             el('cbAuto').checked = p.auto;
             el('cbBlackAuto').checked = p.blackAuto;
+            el('cbSerpentine').checked = p.serpentine;
+            el('cbChromaGuard').checked = p.chromaGuard !== false;
+            if (p.palette && palettes[p.palette]) el('selPalette').value = p.palette;
             if (!p.blackAuto) setRange('rBlack', 60);
+            render();
+        }
+
+        /* 「存为默认」：把当前这一整套参数记下来，下次打开就是它 */
+        function currentSettings() {
+            return {
+                palette: el('selPalette').value,
+                dither: el('selDither').value,
+                size: el('selSize').value,
+                bright: Number(el('rBright').value),
+                contrast: Number(el('rContrast').value),
+                sat: Number(el('rSat').value),
+                shadow: Number(el('rShadow').value),
+                highlight: Number(el('rHighlight').value),
+                radius: Number(el('rRadius').value),
+                tint: Number(el('rTint').value),
+                lWeight: Number(el('rLWeight').value),
+                ditherAmt: Number(el('rDither').value),
+                panelMap: Number(el('rPanelMap').value),
+                auto: el('cbAuto').checked,
+                blackAuto: el('cbBlackAuto').checked,
+                serpentine: el('cbSerpentine').checked,
+                chromaGuard: el('cbChromaGuard').checked,
+            };
+        }
+
+        function applySettings(s) {
+            if (!s) return;
+            if (s.palette && palettes[s.palette]) el('selPalette').value = s.palette;
+            if (s.dither) el('selDither').value = s.dither;
+            if (s.size) el('selSize').value = s.size;
+            setRange('rBright', s.bright ?? 0);
+            setRange('rContrast', s.contrast ?? 0);
+            setRange('rSat', s.sat ?? 0);
+            setRange('rShadow', s.shadow ?? 0);
+            setRange('rHighlight', s.highlight ?? 0);
+            setRange('rRadius', s.radius ?? 12);
+            setRange('rTint', s.tint ?? 0);
+            setRange('rLWeight', s.lWeight ?? 1.2);
+            setRange('rDither', s.ditherAmt ?? 100);
+            setRange('rPanelMap', s.panelMap ?? 0);
+            el('cbAuto').checked = s.auto !== false;
+            el('cbBlackAuto').checked = s.blackAuto !== false;
+            el('cbSerpentine').checked = s.serpentine !== false;
+            el('cbChromaGuard').checked = s.chromaGuard !== false;
             render();
         }
 
@@ -1137,6 +1222,10 @@
         }
 
         el('btnResetTone').addEventListener('click', () => applyPreset('std'));
+        el('btnSaveDefault').addEventListener('click', () => {
+            localStorage.setItem('epd_defaults', JSON.stringify(currentSettings()));
+            logLine('✓ 已存为默认 —— 下次打开页面就是这套参数', 'l-ok');
+        });
         /* 用户手动改过名字就不再自动覆盖 */
         el('fileName').addEventListener('input', () => { state.customName = true; });
         el('btnSendFile').addEventListener('click', () => guard(sendFile));
@@ -1245,6 +1334,13 @@
         if (savedLink) el('selLink').value = savedLink;
         const savedIp = localStorage.getItem('epd_ip');
         if (savedIp) el('ipAddr').value = savedIp;
+
+        /* 调色参数：优先用「存为默认」存下来的，否则用硬编码的默认值 */
+        let savedTone = null;
+        try { savedTone = JSON.parse(localStorage.getItem('epd_defaults') || 'null'); } catch (e) { /* 忽略 */ }
+        applySettings(savedTone || DEFAULTS);
+        logLine(savedTone ? '已套用你「存为默认」的那套参数。' : '已套用内置默认参数（可在预设行点「存为默认」覆盖）。');
+
         syncLinkUI();
 
         if (useWifi()) {
