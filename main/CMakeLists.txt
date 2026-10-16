@@ -1,0 +1,22 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "epd370.c"
+        "waveforms.c"
+        "image.c"
+        "bmp.c"
+        "sdcard.c"
+        "palette_table.c"
+    INCLUDE_DIRS
+        "."
+    PRIV_REQUIRES
+        esp_driver_spi
+        esp_driver_gpio
+        esp_driver_sdmmc
+        esp_common
+        esp_timer
+        fatfs
+        heap
+        sdmmc
+        vfs
+)

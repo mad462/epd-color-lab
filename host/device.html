@@ -1,0 +1,1028 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>48色墨水屏 · 传图台</title>
+    <style>
+        :root {
+            --bg: #14161a; --panel: #1c1f26; --panel2: #232733; --line: #2e3340;
+            --tx: #e6e9ef; --dim: #8b93a5; --acc: #4c8dff; --ok: #35c07a;
+            --warn: #e0a33c; --err: #e05c5c;
+        }
+        * { box-sizing: border-box; }
+        body { margin: 0; background: var(--bg); color: var(--tx);
+               font: 14px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; }
+        header { padding: 14px 22px; border-bottom: 1px solid var(--line);
+                 display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+                 position: sticky; top: 0; background: var(--bg); z-index: 10; }
+        h1 { font-size: 17px; margin: 0; font-weight: 600; }
+        .spacer { flex: 1; }
+        main { display: grid; grid-template-columns: minmax(0, 1fr) 460px;
+               gap: 18px; padding: 18px 22px 40px; align-items: start; }
+        @media (max-width: 1120px) { main { grid-template-columns: 1fr; } }
+        .card { background: var(--panel); border: 1px solid var(--line);
+                border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+        .card h2 { font-size: 13px; margin: 0 0 12px; color: var(--dim);
+                   font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+        button { background: var(--panel2); color: var(--tx); border: 1px solid var(--line);
+                 border-radius: 8px; padding: 8px 14px; font: inherit; cursor: pointer; }
+        button:hover:not(:disabled) { border-color: #4a5164; }
+        button:disabled { opacity: .4; cursor: not-allowed; }
+        button.primary { background: var(--acc); border-color: var(--acc); color: #fff; font-weight: 600; }
+        button.small { padding: 5px 10px; font-size: 13px; }
+        .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+        .row + .row { margin-top: 10px; }
+        select, input[type=text], input[type=number] {
+            background: var(--panel2); color: var(--tx); border: 1px solid var(--line);
+            border-radius: 8px; padding: 7px 10px; font: inherit; }
+        label.opt { display: flex; flex-direction: column; gap: 5px;
+                    font-size: 12.5px; color: var(--dim); }
+        .rg { display: flex; align-items: center; gap: 7px; }
+        .rg input[type=range] { width: 104px; }
+        .rg input[type=number] { width: 64px; padding: 4px 6px; text-align: center;
+                                 font-size: 13px; }
+        .rgs { gap: 18px; }
+        .drop { border: 1.5px dashed var(--line); border-radius: 10px; padding: 22px;
+                text-align: center; color: var(--dim); cursor: pointer; transition: .15s; }
+        .drop:hover, .drop.over { border-color: var(--acc); color: var(--tx); background: #1a1f2b; }
+        .views { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
+        .views figure { margin: 0; }
+        .views figcaption { font-size: 12px; color: var(--dim); margin-bottom: 6px; }
+        .views canvas { width: 100%; height: auto; border: 1px solid var(--line);
+                        border-radius: 8px; background: #000; display: block; image-rendering: pixelated; }
+        .bar { height: 8px; background: var(--panel2); border-radius: 99px;
+               overflow: hidden; margin-top: 12px; }
+        .bar > i { display: block; height: 100%; width: 0; background: var(--acc); transition: width .2s; }
+        #log { background: #0e1014; border: 1px solid var(--line); border-radius: 8px;
+               padding: 10px 12px; height: 220px; overflow-y: auto;
+               font: 12px/1.55 Consolas, monospace; white-space: pre-wrap;
+               word-break: break-all; color: #b9c0cf; }
+        #log .l-err { color: var(--err); } #log .l-ok { color: var(--ok); }
+        #log .l-tx { color: var(--acc); }
+        .pill { display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px;
+                border-radius: 999px; border: 1px solid var(--line); font-size: 13px; color: var(--dim); }
+        .dot { width: 8px; height: 8px; border-radius: 50%; background: #555; }
+        .dot.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+        .hint { color: var(--dim); font-size: 12.5px; margin-top: 8px; }
+        #fileList { max-height: 420px; overflow-y: auto; }
+        .fitem { display: flex; gap: 10px; align-items: center; padding: 8px 10px;
+                 border: 1px solid var(--line); border-radius: 8px; margin-bottom: 6px;
+                 cursor: pointer; background: var(--panel2); }
+        .fitem:hover { border-color: var(--acc); }
+        .fitem.cur { border-color: var(--ok); background: #1b2a22; }
+        .fitem .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                    white-space: nowrap; }
+        .fitem .p { color: var(--dim); font-size: 12px; white-space: nowrap; }
+        .fitem .i { color: var(--dim); font-size: 12px; width: 22px; text-align: right; }
+    </style>
+</head>
+
+<body>
+    <header>
+        <h1>48色墨水屏 · 传图台</h1>
+        <span class="pill"><span class="dot on" id="dot"></span><span id="status">本地助手</span></span>
+        <span class="spacer"></span>
+        <button id="btnList" class="primary">读设备图片列表</button>
+    </header>
+
+    <main>
+        <div>
+            <div class="card">
+                <h2>1 · 选图</h2>
+                <div class="drop" id="drop">
+                    点击选择图片，或拖进来 / 直接 Ctrl+V 粘贴
+                    <input type="file" id="file" accept="image/*" hidden>
+                </div>
+                <div class="views">
+                    <figure><figcaption>原图（裁剪后）</figcaption>
+                        <canvas id="cvSrc" width="480" height="720"></canvas></figure>
+                    <figure><figcaption>量化后（将发到设备）</figcaption>
+                        <canvas id="cvDst" width="480" height="720"></canvas></figure>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>2 · 选项与调色</h2>
+                <div class="row">
+                    <label class="opt">色板 <select id="selPalette"></select></label>
+                    <label class="opt">抖动 <select id="selDither">
+                            <option value="floyd-steinberg" selected>Floyd Steinberg（推荐）</option>
+                            <option value="atkinson">Atkinson</option>
+                            <option value="stucki">Stucki</option>
+                            <option value="burkes">Burkes</option>
+                            <option value="sierra">Sierra</option>
+                            <option value="none">不使用抖动</option>
+                        </select></label>
+                    <label class="opt">构图尺寸 <select id="selSize">
+                            <option value="720x480" selected>720 × 480（设备原生，不转）</option>
+                            <option value="480x720">480 × 720 竖版（设备自动转正）</option>
+                        </select></label>
+                </div>
+
+                <div class="row">
+                    <label class="opt">亮度 <span class="rg">
+                            <input type="range" id="rBright" min="-40" max="40" value="0">
+                            <input type="number" id="rBrightNum" min="-40" max="40" value="0"></span></label>
+                    <label class="opt">对比度 <span class="rg">
+                            <input type="range" id="rContrast" min="-40" max="40" value="0">
+                            <input type="number" id="rContrastNum" min="-40" max="40" value="0"></span></label>
+                    <label class="opt">饱和度 <span class="rg">
+                            <input type="range" id="rSat" min="0" max="80" value="0">
+                            <input type="number" id="rSatNum" min="0" max="80" value="0"></span></label>
+                </div>
+
+                <div class="row" style="margin-top:14px">
+                    <span style="color:var(--dim);font-size:12.5px">预设：</span>
+                    <button class="small preset" data-preset="std">标准</button>
+                    <button class="small preset" data-preset="bright">提亮</button>
+                    <button class="small preset" data-preset="vivid">浓一点</button>
+                    <button class="small preset" data-preset="rescue">救高光</button>
+                    <span class="spacer"></span>
+                    <label class="opt" style="flex-direction:row;gap:6px;align-items:center">
+                        <input type="checkbox" id="cbAdv"> 高级</label>
+                </div>
+                <div class="hint" id="toneInfo">—</div>
+
+                <div id="advBox" hidden style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">
+                    <div class="row">
+                        <label class="opt">黑点 <span class="rg">
+                                <input type="range" id="rBlack" min="0" max="90" value="60">
+                                <input type="number" id="rBlackNum" min="0" max="90" value="60"></span></label>
+                        <label class="opt" style="flex-direction:row;gap:6px;align-items:center;align-self:flex-end">
+                            <input type="checkbox" id="cbBlackAuto" checked> 自动</label>
+                        <label class="opt">色偏微调 <span class="rg">
+                                <input type="range" id="rTint" min="-20" max="20" value="0">
+                                <input type="number" id="rTintNum" min="-20" max="20" value="0"></span></label>
+                        <label class="opt">明度权重 <span class="rg">
+                                <input type="range" id="rLWeight" min="0.4" max="3" step="0.1" value="1.2">
+                                <input type="number" id="rLWeightNum" min="0.4" max="3" step="0.1" value="1.2"></span></label>
+                    </div>
+                    <div class="row">
+                        <label class="opt">阴影 <span class="rg">
+                                <input type="range" id="rShadow" min="-100" max="100" value="0">
+                                <input type="number" id="rShadowNum" min="-100" max="100" value="0"></span></label>
+                        <label class="opt">高光 <span class="rg">
+                                <input type="range" id="rHighlight" min="-100" max="100" value="0">
+                                <input type="number" id="rHighlightNum" min="-100" max="100" value="0"></span></label>
+                        <label class="opt">半径 <span class="rg">
+                                <input type="range" id="rRadius" min="2" max="60" value="12">
+                                <input type="number" id="rRadiusNum" min="2" max="60" value="12"></span></label>
+                        <label class="opt">抖动强度 <span class="rg">
+                                <input type="range" id="rDither" min="0" max="150" value="100">
+                                <input type="number" id="rDitherNum" min="0" max="150" value="100"></span></label>
+                    </div>
+                    <div class="row">
+                        <label class="opt" style="flex-direction:row;gap:6px;align-items:center">
+                            <input type="checkbox" id="cbAuto" checked> 自动色阶</label>
+                        <label class="opt" style="flex-direction:row;gap:6px;align-items:center">
+                            <input type="checkbox" id="cbPanelMap"> 映射到面板范围</label>
+                        <button class="small" id="btnResetTone">全部复位</button>
+                    </div>
+                    <div class="hint" id="mapInfo">—</div>
+                    <div class="hint"><b>没事别动这里。</b>大部分情况「预设」就够了。<br>
+                        <b>黑点</b>建议保持「自动」—— 它跟着色板的最暗档位走，
+                        这是面板属性，手动调只会让暗部脱节。<br>
+                        <b>阴影 / 高光</b>是 PS 风格的<b>局部</b>算法，暗部亮部互不干扰
+                        （实测 +100：压高光时暗区 40→39.8 几乎不动）。<br>
+                        <b>明度权重</b>1.2 是实测默认（FrameFilm 的 2 会把肤色匹配成浅灰绿）。<br>
+                        <b>映射到面板范围</b>默认关：开它会把对比度压平、亮部推成黄色。</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>3 · 传图</h2>
+                <div class="row">
+                    <button id="btnSendFile" class="primary" disabled>存到 TF 卡并显示</button>
+                    <button id="btnSendRaw" disabled>只显示，不存卡</button>
+                    <input type="text" id="fileName" value="pic" style="width:170px" placeholder="文件名（ASCII）">
+                </div>
+                <div class="hint" id="nameHint">名字只能是 ASCII；中文会被自动去掉</div>
+                <div class="bar"><i id="prog"></i></div>
+                <div class="hint" id="txHint">—</div>
+            </div>
+        </div>
+
+        <div>
+            <div class="card">
+                <h2>设备上的图片</h2>
+                <div class="hint" style="margin:0 0 10px">点一行就切到那张图（设备端刷新约 15 秒）</div>
+                <div id="fileList"><div class="hint">还没读列表，点右上角「读设备图片列表」</div></div>
+            </div>
+
+            <div class="card">
+                <h2>串口日志</h2>
+                <div id="log"></div>
+                <div class="row" style="margin-top:8px">
+                    <button class="small" id="btnClearLog">清空</button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script type="module">
+        // ======================================================== 常量 / 工具
+        const BAUD_TEXT = '115200';
+        const KERNELS = {
+            'none': [],
+            'floyd-steinberg': [[1, 0, 7 / 16], [-1, 1, 3 / 16], [0, 1, 5 / 16], [1, 1, 1 / 16]],
+            'atkinson': [[1, 0, 1 / 8], [2, 0, 1 / 8], [-1, 1, 1 / 8], [0, 1, 1 / 8], [1, 1, 1 / 8], [0, 2, 1 / 8]],
+            'stucki': [[1, 0, 8 / 42], [2, 0, 4 / 42], [-2, 1, 2 / 42], [-1, 1, 4 / 42], [0, 1, 8 / 42],
+            [1, 1, 4 / 42], [2, 1, 2 / 42], [-2, 2, 1 / 42], [-1, 2, 2 / 42], [0, 2, 4 / 42],
+            [1, 2, 2 / 42], [2, 2, 1 / 42]],
+            'burkes': [[1, 0, 8 / 32], [2, 0, 4 / 32], [-2, 1, 2 / 32], [-1, 1, 4 / 32],
+            [0, 1, 8 / 32], [1, 1, 4 / 32], [2, 1, 2 / 32]],
+            'sierra': [[1, 0, 5 / 32], [2, 0, 3 / 32], [-2, 1, 2 / 32], [-1, 1, 4 / 32], [0, 1, 5 / 32],
+            [1, 1, 4 / 32], [2, 1, 2 / 32], [-1, 2, 2 / 32], [0, 2, 3 / 32], [1, 2, 2 / 32]],
+        };
+
+        const el = (id) => document.getElementById(id);
+        const logEl = el('log');
+        function log(text, cls) {
+            const s = document.createElement('span');
+            if (cls) s.className = cls;
+            s.textContent = text;
+            logEl.appendChild(s);
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+        function logLine(t, c) { log(t + '\n', c); }
+
+        // 页面上所有和设备的交互都走本地助手（server.py），
+        // 不用 Web Serial —— 某些机器上浏览器枚举不到 CH343。
+        async function api(path, opts = {}, timeoutMs = 600000) {
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+            try {
+                const res = await fetch(path, { ...opts, signal: ctrl.signal });
+                return await res.json();
+            } catch (e) {
+                return { ok: false, log: ['和本地助手通讯失败：' + e.message + '（server.py 起了吗？）'] };
+            } finally {
+                clearTimeout(timer);
+            }
+        }
+        function showResult(r, quiet = false) {
+            if (!quiet) (r.log || []).forEach((l) => logLine('   ' + l, r.ok ? '' : 'l-err'));
+            logLine(r.ok ? '完成' : '失败', r.ok ? 'l-ok' : 'l-err');
+        }
+
+        // ======================================================== 色彩
+        const SRGB = new Float32Array(256);
+        for (let i = 0; i < 256; i++) {
+            const c = i / 255;
+            SRGB[i] = c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+        }
+        function rgbToLab(r, g, b) {
+            const rl = SRGB[r] * 100, gl = SRGB[g] * 100, bl = SRGB[b] * 100;
+            const x = (rl * 0.4124564 + gl * 0.3575761 + bl * 0.1804375) / 95.047;
+            const y = (rl * 0.2126729 + gl * 0.7151522 + bl * 0.0721750) / 100;
+            const z = (rl * 0.0193339 + gl * 0.1191920 + bl * 0.9503041) / 108.883;
+            const f = (t) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
+            const fx = f(x), fy = f(y), fz = f(z);
+            return [116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)];
+        }
+
+        function labToRgb(L, A, B) {
+            const fy = (L + 16) / 116, fx = fy + A / 500, fz = fy - B / 200;
+            const finv = (t) => (t * t * t > 0.008856 ? t * t * t : (t - 16 / 116) / 7.787);
+            const x = finv(fx) * 0.95047, y = finv(fy), z = finv(fz) * 1.08883;
+            const r = x * 3.2404542 + y * -1.5371385 + z * -0.4985314;
+            const g = x * -0.9692660 + y * 1.8760108 + z * 0.0415560;
+            const b = x * 0.0556434 + y * -0.2040259 + z * 1.0572252;
+            const enc = (c) => {
+                c = Math.max(0, Math.min(1, c));
+                return c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
+            };
+            return [Math.round(enc(r) * 255), Math.round(enc(g) * 255), Math.round(enc(b) * 255)];
+        }
+
+        /**
+         * 把图像的明度范围压到面板能出的范围（在 L* 里线性压，感知均匀）。
+         *
+         * 为什么必须做：面板实测最亮只到 L*72。不压的话，图像里 L*72 以上的
+         * 所有像素全挤到"最亮那个索引" → 一大片死白（过曝）；同时面板的
+         * 亮部档位用不满 → 层次丢失、对比度显得偏高。
+         *
+         * 色度要**跟着明度一起缩**（a/b 乘 L2/L），就像同一个颜色换个照度看。
+         * 如果 a/b 原样不动，明度压低之后相对饱和度反而变高，本来就偏暖的画面
+         * 会被放大成明显偏黄。
+         *
+         * （注意：这跟"改色板"不一样。之前那次是去改色板、把面板暗部的色度抹平，
+         *  导致量化器分不清蓝暗和红暗 —— 那次是错的。这里是改图像，且明度是被
+         * 抬升/压缩而不是压到 0，比例缩放不会把色度归零。）
+         */
+        function compressToPanel(data, Lmin, Lmax) {
+            for (let i = 0; i < data.length; i += 4) {
+                const lab = rgbToLab(data[i], data[i + 1], data[i + 2]);
+                const L = lab[0];
+                const L2 = Lmin + (L / 100) * (Lmax - Lmin);
+
+                let k = (L > 1) ? (L2 / L) : 1;
+                k = Math.max(0.5, Math.min(1.6, k));   // 极暗处别放大过头
+
+                const rgb = labToRgb(L2, lab[1] * k, lab[2] * k);
+                data[i] = rgb[0]; data[i + 1] = rgb[1]; data[i + 2] = rgb[2];
+            }
+        }
+
+        const CRC_TABLE = (() => {
+            const t = new Uint32Array(256);
+            for (let n = 0; n < 256; n++) {
+                let c = n;
+                for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+                t[n] = c >>> 0;
+            }
+            return t;
+        })();
+        function crc32(bytes) {
+            let c = 0xFFFFFFFF;
+            for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+            return (c ^ 0xFFFFFFFF) >>> 0;
+        }
+
+        // ======================================================== 色板
+        const palettes = {};
+        async function loadPalettes() {
+            const manifest = await (await fetch('./act/palettes.json', { cache: 'no-store' })).json();
+            const list = (Array.isArray(manifest) ? manifest : (manifest.palettes || []))
+                .filter((e) => e && typeof e === 'object' && e.file);
+            const sel = el('selPalette');
+            sel.innerHTML = '';
+            for (const e of list) {
+                const r = await fetch('./act/' + e.file, { cache: 'no-store' });
+                const buf = new Uint8Array(await r.arrayBuffer());
+                const colors = [];
+                for (let i = 0; i + 2 < buf.length; i += 3) colors.push([buf[i], buf[i + 1], buf[i + 2]]);
+
+                /* 算出这张色板有效槽位的 L* 范围 —— 色调压缩要用它当目标 */
+                const act = e.active && e.active.length ? e.active : colors.map((_, i) => i);
+                let lmin = 100, lmax = 0;
+                for (const i of act) {
+                    const L = rgbToLab(colors[i][0], colors[i][1], colors[i][2])[0];
+                    if (L < lmin) lmin = L;
+                    if (L > lmax) lmax = L;
+                }
+
+                palettes[e.file] = {
+                    colors, active: e.active || null, label: e.label || e.file,
+                    Lmin: lmin, Lmax: lmax
+                };
+                const o = document.createElement('option');
+                o.value = e.file;
+                o.textContent = e.label || e.file;
+                sel.appendChild(o);
+            }
+            sel.addEventListener('change', render);
+        }
+        const curPalette = () => palettes[el('selPalette').value] || null;
+
+        // ======================================================== 局部阴影/高光
+        /**
+         * 参考 Photoshop 的「阴影/高光」。
+         *
+         * 为什么不能用一条全局曲线：全局曲线没法区分"这个像素暗是因为它在阴影里"
+         * 还是"它本来就是个暗色物体"。把拐点往下压来压高光，中间调和暗部会被一起
+         * 压进去（实测：拐点 k=255*(1-0.7*hs)，hs=100% 时 k 只有 76，中调全中招）。
+         *
+         * PS 的做法是**局部**的：先求一张大半径模糊的亮度图当作"这一带有多亮"，
+         * 再用它做蒙版 ——
+         *   阴影蒙版 = (1 - 局部亮度)² × (1 - 该像素亮度)   → 只作用在"暗的地方的暗像素"
+         *   高光蒙版 = 局部亮度²       × 该像素亮度          → 只作用在"亮的地方的亮像素"
+         * 两者天然互不干扰：压高光时，暗部的蒙版值是 0，动都不动。
+         */
+        function localLuma(data, w, h, scale) {
+            const bw = Math.max(1, Math.round(w / scale));
+            const bh = Math.max(1, Math.round(h / scale));
+            const sum = new Float32Array(bw * bh);
+            const cnt = new Float32Array(bw * bh);
+
+            for (let y = 0; y < h; y++) {
+                const by = Math.min(bh - 1, Math.floor(y * bh / h));
+                for (let x = 0; x < w; x++) {
+                    const bx = Math.min(bw - 1, Math.floor(x * bw / w));
+                    const o = (y * w + x) * 4;
+                    sum[by * bw + bx] += data[o] * 0.2126 + data[o + 1] * 0.7152 + data[o + 2] * 0.0722;
+                    cnt[by * bw + bx]++;
+                }
+            }
+            for (let i = 0; i < sum.length; i++) sum[i] /= Math.max(1, cnt[i]);
+
+            // 小图上做两遍盒式模糊，近似高斯
+            let a = sum;
+            for (let p = 0; p < 2; p++) a = boxBlurSmall(a, bw, bh, 2);
+            return { map: a, bw, bh };
+        }
+
+        function boxBlurSmall(src, w, h, r) {
+            const tmp = new Float32Array(w * h);
+            const out = new Float32Array(w * h);
+            for (let y = 0; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                    let acc = 0, n = 0;
+                    for (let d = -r; d <= r; d++) {
+                        const xx = x + d;
+                        if (xx >= 0 && xx < w) { acc += src[y * w + xx]; n++; }
+                    }
+                    tmp[y * w + x] = acc / n;
+                }
+            }
+            for (let x = 0; x < w; x++) {
+                for (let y = 0; y < h; y++) {
+                    let acc = 0, n = 0;
+                    for (let d = -r; d <= r; d++) {
+                        const yy = y + d;
+                        if (yy >= 0 && yy < h) { acc += tmp[yy * w + x]; n++; }
+                    }
+                    out[y * w + x] = acc / n;
+                }
+            }
+            return out;
+        }
+
+        function sampleBilinear(m, w, h, fx, fy) {
+            const x0 = Math.max(0, Math.min(w - 1, Math.floor(fx)));
+            const y0 = Math.max(0, Math.min(h - 1, Math.floor(fy)));
+            const x1 = Math.min(w - 1, x0 + 1), y1 = Math.min(h - 1, y0 + 1);
+            const tx = Math.max(0, Math.min(1, fx - x0)), ty = Math.max(0, Math.min(1, fy - y0));
+            const a = m[y0 * w + x0], b = m[y0 * w + x1];
+            const c = m[y1 * w + x0], d = m[y1 * w + x1];
+            return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
+        }
+
+        /** shadow / highlight: -100~100。正值 = 提亮阴影 / 压暗高光 */
+        function shadowsHighlights(data, w, h, shadow, highlight, radius) {
+            if (shadow === 0 && highlight === 0) return false;
+            const scale = Math.max(2, Math.round(radius));   // 半径越大 -> 降采样越狠
+            const { map, bw, bh } = localLuma(data, w, h, scale);
+            const s = shadow / 100, hi = highlight / 100;
+
+            for (let y = 0; y < h; y++) {
+                const fy = (y + 0.5) * bh / h - 0.5;
+                for (let x = 0; x < w; x++) {
+                    const o = (y * w + x) * 4;
+                    const fx = (x + 0.5) * bw / w - 0.5;
+                    const lb = sampleBilinear(map, bw, bh, fx, fy) / 255;
+                    const r = data[o], g = data[o + 1], b = data[o + 2];
+                    const lum = (r * 0.2126 + g * 0.7152 + b * 0.0722) / 255;
+
+                    const mShadow = (1 - lb) * (1 - lb) * (1 - lum);
+                    const mHigh = lb * lb * lum;
+
+                    /* 系数是调出来的，不是拍的：
+                     *   阴影 +100 -> 全黑区域约 ×1.9（40 -> 76 左右）
+                     *   高光 +100 -> 全白区域约 ×0.55（255 -> 140 左右）
+                     * 之前用 1.6 时白区会被乘到 0.04，215 直接掉到 37 —— 那是毁图。 */
+                    const f = 1 + s * mShadow * 0.9 - hi * mHigh * 0.45;
+
+                    data[o] = Math.max(0, Math.min(255, r * f));
+                    data[o + 1] = Math.max(0, Math.min(255, g * f));
+                    data[o + 2] = Math.max(0, Math.min(255, b * f));
+                }
+            }
+            return true;
+        }
+
+        /**
+         * 自动色阶 + 亮度/对比度。
+         *
+         * 为什么需要：面板实测最亮只有 L*72，忠实映射必然偏暗。
+         * 自动色阶把画面的实际明暗范围拉满到 0~255，亮度/对比度再微调。
+         * 这一步在量化**之前**做，改变的是量化目标。
+         */
+        function applyTone(data, w, h) {
+            const auto = el('cbAuto').checked;
+            const bright = Number(el('rBright').value);
+            const contrast = Number(el('rContrast').value);
+            if (!auto && bright === 0 && contrast === 0) return null;
+
+            let lo = 0, hi = 255;
+            if (auto) {
+                const hist = new Uint32Array(256);
+                for (let i = 0; i < data.length; i += 4) {
+                    const l = (data[i] * 77 + data[i + 1] * 150 + data[i + 2] * 29) >> 8;
+                    hist[l]++;
+                }
+                const total = (data.length / 4);
+                const loTarget = total * 0.01, hiTarget = total * 0.99;
+                let acc = 0;
+                for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= loTarget) { lo = v; break; } }
+                acc = 0;
+                for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= hiTarget) { hi = v; break; } }
+                if (hi - lo < 8) { lo = 0; hi = 255; }   // 画面本来就平，别乱拉
+            }
+
+            /* 输出范围：黑点由「黑点」控制，白点固定 247 留高光余量。
+             *
+             * 黑点为什么不能是 0：面板实测最暗只到 L*31（#454951），
+             * 而且 L*31 以下**一个档位都没有**。把图像最暗的拉到 sRGB 8（约 L*2.6）
+             * 的话，全部暗部内容会塌进最暗那几个档位 —— 就是"暗区被压到一块"。
+             * 抬到面板最暗附近（sRGB 约 60~74），暗部层次才能摊开在十几个暗档位上。 */
+            const OUT_LO = Number(el('rBlack').value), OUT_HI = 247;
+            const cf = (100 + contrast) / 100;
+            const bf = bright * 2.55;
+            const lut = new Uint8Array(256);
+            for (let v = 0; v < 256; v++) {
+                let x = OUT_LO + (v - lo) / (hi - lo) * (OUT_HI - OUT_LO);
+                x = (x - 128) * cf + 128 + bf;
+                lut[v] = Math.max(0, Math.min(255, Math.round(x)));
+            }
+
+            /* 注意：这里**没有**全局高光压缩了。
+             *
+             * 之前那版是 `if (x > k)`，而 k = 255*(1-0.7*hs) —— hs=100% 时 k 只有 76，
+             * 中间调全被卷进去了，所以"压高光会把暗区也压暗"。
+             * 现在交给 shadowsHighlights()：它用局部亮度蒙版，暗部区域完全不受影响。 */
+
+            for (let i = 0; i < data.length; i += 4) {
+                data[i] = lut[data[i]];
+                data[i + 1] = lut[data[i + 1]];
+                data[i + 2] = lut[data[i + 2]];
+            }
+
+            // 局部阴影/高光（PS 风格）—— 放在色阶之后、量化之前
+            shadowsHighlights(data, w, h,
+                Number(el('rShadow').value),
+                Number(el('rHighlight').value),
+                Number(el('rRadius').value));
+            return { lo, hi };
+        }
+
+        // ======================================================== 量化
+        function quantize(pixels, w, h, palette, activeIdx, kernelName, lWeight, ditherScale) {
+            const colors = palette.colors;
+            const kernel = KERNELS[kernelName] || [];
+            const ds = (ditherScale === undefined ? 100 : ditherScale) / 100;
+            const list = activeIdx && activeIdx.length ? activeIdx : colors.map((_, i) => i);
+            const labList = list.map((i) => rgbToLab(colors[i][0], colors[i][1], colors[i][2]));
+            const work = new Float32Array(pixels.length);
+            for (let i = 0; i < pixels.length; i++) work[i] = pixels[i];
+            const out = new Uint8Array(w * h);
+            const add = (x, y, dr, dg, db, f) => {
+                if (x < 0 || x >= w || y < 0 || y >= h) return;
+                const o = (y * w + x) * 4;
+                work[o] += dr * f; work[o + 1] += dg * f; work[o + 2] += db * f;
+            };
+            const lw = lWeight;
+            for (let y = 0; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                    const o = (y * w + x) * 4;
+                    const r = Math.max(0, Math.min(255, work[o]));
+                    const g = Math.max(0, Math.min(255, work[o + 1]));
+                    const b = Math.max(0, Math.min(255, work[o + 2]));
+                    const [L, A, B] = rgbToLab(r | 0, g | 0, b | 0);
+                    let best = list[0], bestD = Infinity;
+                    for (let k = 0; k < list.length; k++) {
+                        const lab = labList[k];
+                        const dL = (L - lab[0]) * lw, dA = A - lab[1], dB = B - lab[2];
+                        const d = dL * dL + dA * dA + dB * dB;
+                        if (d < bestD) { bestD = d; best = list[k]; }
+                    }
+                    out[y * w + x] = best;
+                    const tc = colors[best];
+                    const dr = (r - tc[0]) * ds, dg = (g - tc[1]) * ds, db = (b - tc[2]) * ds;
+                    for (const [dx, dy, f] of kernel) add(x + dx, y + dy, dr, dg, db, f);
+                }
+            }
+            return out;
+        }
+
+        /**
+         * 饱和度增益：把图像色度整体放大一点再匹配。
+         * 实测色板整体比标称值"淡"（量测带漫反射，色度会被压），
+         * 适当加一点饱和度能把更鲜艳的档位拉进来，恢复红润。
+         */
+        function boostSaturation(data, pct, tint) {
+            if (pct === 0 && tint === 0) return;
+            const k = 1 + pct / 100;
+            for (let i = 0; i < data.length; i += 4) {
+                const lab = rgbToLab(data[i], data[i + 1], data[i + 2]);
+                const rgb = labToRgb(lab[0], lab[1] * k, lab[2] * k + tint);
+                data[i] = rgb[0]; data[i + 1] = rgb[1]; data[i + 2] = rgb[2];
+            }
+        }
+
+        function rotCW(idx, sw, sh) {
+            const dw = sh, dh = sw;
+            const out = new Uint8Array(dw * dh);
+            for (let y = 0; y < dh; y++) {
+                const base = y * dw;
+                for (let x = 0; x < dw; x++) out[base + x] = idx[(sh - 1 - x) * sw + y];
+            }
+            return { idx: out, w: dw, h: dh };
+        }
+
+        function buildBMP(idx, w, h, colors) {
+            const n = colors.length;
+            const rowSize = ((w * 8 + 31) >> 5) << 2;
+            const pixelBytes = rowSize * h;
+            const offset = 14 + 40 + n * 4;
+            const total = offset + pixelBytes;
+            const buf = new Uint8Array(total);
+            const dv = new DataView(buf.buffer);
+            buf[0] = 0x42; buf[1] = 0x4D;
+            dv.setUint32(2, total, true);
+            dv.setUint32(10, offset, true);
+            dv.setUint32(14, 40, true);
+            dv.setInt32(18, w, true);
+            dv.setInt32(22, h, true);
+            dv.setUint16(26, 1, true);
+            dv.setUint16(28, 8, true);
+            dv.setUint32(34, pixelBytes, true);
+            dv.setInt32(38, 2835, true);
+            dv.setInt32(42, 2835, true);
+            dv.setUint32(46, n, true);
+            dv.setUint32(50, n, true);
+            let p = 54;
+            for (const [r, g, b] of colors) { buf[p++] = b; buf[p++] = g; buf[p++] = r; buf[p++] = 255; }
+            const pad = rowSize - w;
+            for (let y = h - 1; y >= 0; y--) {
+                buf.set(idx.subarray(y * w, y * w + w), p);
+                p += w + pad;
+            }
+            return buf;
+        }
+
+        function safeName(raw) {
+            let n = String(raw || '').trim().replace(/[^\x20-\x7E]/g, '')
+                .replace(/[\\/:*?"<>|]/g, '_').replace(/^[\s._]+|[\s.]+$/g, '')
+                .replace(/\.bmp$/i, '');
+            if (!n) {
+                const d = new Date(), q = (x) => String(x).padStart(2, '0');
+                n = `pic_${q(d.getMonth() + 1)}${q(d.getDate())}_${q(d.getHours())}${q(d.getMinutes())}${q(d.getSeconds())}`;
+            }
+            return n.slice(0, 60) + '.bmp';
+        }
+
+        /** 去掉中文等非 ASCII，留个干净的基名 */
+        function asciiBase(raw) {
+            const n = String(raw || '').trim().replace(/[^\x20-\x7E]/g, '')
+                .replace(/[\\/:*?"<>|]/g, '_').replace(/^[\s._]+|[\s.]+$/g, '');
+            return n.slice(0, 40) || 'pic';
+        }
+
+        /**
+         * 把当前微调参数编成一个短标签，拼进文件名。
+         *
+         * 为什么：设备只存 BMP，参数本身不在文件里。想事后对比"哪张图是什么设置
+         * 做的"，最省事的办法就是让名字带上参数 —— 设备列表里一眼就能看到。
+         *   B+10 亮度  C-5 对比度  A1/A0 自动色阶  FS 抖动  Q/F 色板
+         */
+        function paramTag() {
+            const b = Number(el('rBright').value);
+            const c = Number(el('rContrast').value);
+            const s = Number(el('rShadow').value);
+            const h = Number(el('rHighlight').value);
+            const bk = Number(el('rBlack').value);
+            const auto = el('cbAuto').checked ? 'A1' : 'A0';
+            const K = {
+                'floyd-steinberg': 'FS', 'atkinson': 'AT', 'stucki': 'ST',
+                'burkes': 'BK', 'sierra': 'SR', 'none': 'NN'
+            };
+            const k = K[el('selDither').value] || 'XX';
+            const p = /fast/.test(el('selPalette').value) ? 'F' : 'Q';
+            return `B${b >= 0 ? '+' : ''}${b}_C${c >= 0 ? '+' : ''}${c}`
+                + `_S${s >= 0 ? '+' : ''}${s}_H${h >= 0 ? '+' : ''}${h}`
+                + `_K${bk}_${auto}_${k}_${p}`;
+        }
+
+        function composeName() {
+            return safeName(`${state.baseName || 'pic'}__${paramTag()}`);
+        }
+
+        // ======================================================== 界面状态
+        const state = { img: null, idx: null, w: 0, h: 0, baseName: 'pic', customName: false };
+        const cvSrc = el('cvSrc'), cvDst = el('cvDst');
+
+        function targetSize() {
+            const [w, h] = el('selSize').value.split('x').map(Number);
+            return { w, h };
+        }
+        function drawCover(canvas, img, w, h) {
+            canvas.width = w; canvas.height = h;
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            const s = Math.max(w / img.width, h / img.height);
+            const dw = img.width * s, dh = img.height * s;
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, w, h);
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(img, (w - dw) / 2, (h - dh) / 2, dw, dh);
+            return ctx.getImageData(0, 0, w, h);
+        }
+
+        function render() {
+            if (!state.img) return;
+            const palette = curPalette();
+            if (!palette) return;
+
+            const { w, h } = targetSize();
+
+            /* 黑点自动跟随色板 —— 面板换一张色板，能出的最暗就变了 */
+            if (el('cbBlackAuto').checked) {
+                setRange('rBlack', autoBlack(palette));
+            }
+
+            const imageData = drawCover(cvSrc, state.img, w, h);
+            const tone = applyTone(imageData.data, w, h);
+            let mapped = false;
+            if (el('cbPanelMap').checked) {
+                compressToPanel(imageData.data, palette.Lmin, palette.Lmax);
+                mapped = true;
+            }
+            boostSaturation(imageData.data, Number(el('rSat').value), Number(el('rTint').value));
+
+            const t0 = performance.now();
+            const qIdx = quantize(imageData.data, w, h, palette,
+                palette.active, el('selDither').value,
+                Number(el('rLWeight').value), Number(el('rDither').value));
+            const ms = performance.now() - t0;
+
+            // 预览按构图方向画 = 上屏后看到的方向
+            cvDst.width = w; cvDst.height = h;
+            const dctx = cvDst.getContext('2d');
+            const out = dctx.createImageData(w, h);
+            for (let i = 0; i < qIdx.length; i++) {
+                const c = palette.colors[qIdx[i]];
+                out.data[i * 4] = c[0]; out.data[i * 4 + 1] = c[1];
+                out.data[i * 4 + 2] = c[2]; out.data[i * 4 + 3] = 255;
+            }
+            dctx.putImageData(out, 0, 0);
+
+            let sendIdx = qIdx, fw = w, fh = h;
+            if (w < h) { const r = rotCW(qIdx, w, h); sendIdx = r.idx; fw = r.w; fh = r.h; }
+            state.idx = sendIdx; state.w = fw; state.h = fh;
+
+            const uniq = new Set(sendIdx).size;
+            el('txHint').textContent =
+                `预览 ${w}×${h} · 发送 ${fw}×${fh} 帧 · 用了 ${uniq} 种颜色`
+                + ` · 量化 ${ms.toFixed(0)} ms · 传输约 ${(sendIdx.length / 11520).toFixed(0)} 秒`;
+            if (tone) el('toneInfo').textContent = `自动色阶：把 ${tone.lo}~${tone.hi} 拉到 0~255`;
+            else el('toneInfo').textContent = '色调映射已关闭（亮度/对比度都为 0）';
+            el('mapInfo').textContent = mapped
+                ? `已把明度压到面板范围 L* ${palette.Lmin.toFixed(0)}~${palette.Lmax.toFixed(0)}（防止高光死白、用满面板层次）`
+                : '未做面板范围映射 —— 高光可能死白（一大片挤在最亮那一档）';
+
+            /* 参数变了就同步文件名 —— 除非用户自己改过名字 */
+            if (state.baseName && !state.customName) {
+                el('fileName').value = composeName();
+            }
+            refreshButtons();
+        }
+
+        function refreshButtons() {
+            const ready = !!state.idx;
+            el('btnSendFile').disabled = !ready;
+            el('btnSendRaw').disabled = !ready;
+        }
+
+        // ======================================================== 进度
+        let pollTimer = null;
+        function startPoll() {
+            stopPoll();
+            pollTimer = setInterval(async () => {
+                const p = await api('/progress', {}, 5000);
+                if (p && p.active) {
+                    const pct = p.total ? (p.sent / p.total) : 0;
+                    el('prog').style.width = (pct * 100).toFixed(1) + '%';
+                    const kb = (p.sent / 1024).toFixed(0);
+                    const kt = (p.total / 1024).toFixed(0);
+                    el('status').textContent = `${p.phase} ${kb}/${kt} KB`;
+                } else if (p && p.phase === 'done') {
+                    el('prog').style.width = '100%';
+                    el('status').textContent = '本地助手';
+                }
+            }, 400);
+        }
+        function stopPoll() {
+            if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+            el('status').textContent = '本地助手';
+        }
+
+        // ======================================================== 设备列表
+        let curShown = -1;
+        function renderList(files) {
+            const box = el('fileList');
+            box.innerHTML = '';
+            if (!files.length) {
+                box.innerHTML = '<div class="hint">设备上没找到图片</div>';
+                return;
+            }
+            for (const f of files) {
+                const d = document.createElement('div');
+                d.className = 'fitem' + (f.index === curShown ? ' cur' : '');
+                d.innerHTML = `<span class="i">${f.index}</span>`
+                    + `<span class="n"></span><span class="p"></span>`;
+                d.querySelector('.n').textContent = f.name;
+                d.querySelector('.p').textContent =
+                    `${(f.size / 1024).toFixed(0)} KB  ${f.info}`;
+                d.addEventListener('click', () => showFile(f));
+                box.appendChild(d);
+            }
+        }
+
+        async function showFile(f) {
+            logLine(`→ 切到 [${f.index}] ${f.name}`, 'l-tx');
+            el('status').textContent = '切换中…';
+            startPoll();
+            const r = await api('/show?i=' + f.index);
+            stopPoll();
+            el('prog').style.width = '100%';
+            setTimeout(() => { el('prog').style.width = '0'; }, 1200);
+            if (r.ok) curShown = f.index;
+            const lines = (r.log || []).filter((l) => /读 |色板匹配|显示完成|失败|超出/.test(l));
+            lines.forEach((l) => logLine('   ' + l, r.ok ? '' : 'l-err'));
+            logLine(r.ok ? '已切换' : '切换失败', r.ok ? 'l-ok' : 'l-err');
+            if (r.files) renderList(r.files);
+        }
+
+        async function loadList() {
+            logLine('→ 读设备图片列表', 'l-tx');
+            el('status').textContent = '读取列表…';
+            const r = await api('/list');
+            el('status').textContent = '本地助手';
+            (r.log || []).filter((l) => /找到|\[/.test(l)).forEach((l) => logLine('   ' + l));
+            if (!r.ok) { logLine('读列表失败', 'l-err'); return; }
+            renderList(r.files || []);
+            logLine(`读到 ${(r.files || []).length} 张`, 'l-ok');
+        }
+
+        // ======================================================== 传图
+        async function sendFile() {
+            const name = safeName(el('fileName').value);
+            el('fileName').value = name;
+            const palette = curPalette();
+            const bmp = buildBMP(state.idx, state.w, state.h, palette.colors);
+            logLine(`→ 上传 ${name}（${bmp.length} 字节，约 ${(bmp.length / 11520).toFixed(0)} 秒）`, 'l-tx');
+            startPoll();
+            const r = await api('/send?name=' + encodeURIComponent(name),
+                { method: 'POST', body: bmp });
+            stopPoll();
+            el('prog').style.width = '100%';
+            setTimeout(() => { el('prog').style.width = '0'; }, 1500);
+            (r.log || []).filter((l) => /文件头|准备收|收完|保存完成|失败|CRC/.test(l))
+                .forEach((l) => logLine('   ' + l, r.ok ? '' : 'l-err'));
+            logLine(r.ok ? '上传完成' : '上传失败', r.ok ? 'l-ok' : 'l-err');
+            if (r.ok) setTimeout(loadList, 3000);
+        }
+
+        async function sendRaw() {
+            logLine(`→ 直接显示（${state.idx.length} 字节，约 ${(state.idx.length / 11520).toFixed(0)} 秒）`, 'l-tx');
+            startPoll();
+            const r = await api('/send?type=raw', { method: 'POST', body: state.idx });
+            stopPoll();
+            el('prog').style.width = '100%';
+            setTimeout(() => { el('prog').style.width = '0'; }, 1500);
+            showResult(r);
+            curShown = -1;
+        }
+
+        // ======================================================== 事件
+        const drop = el('drop'), fileInput = el('file');
+        drop.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', () => loadFile(fileInput.files[0]));
+        drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+        drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+        drop.addEventListener('drop', (e) => {
+            e.preventDefault(); drop.classList.remove('over'); loadFile(e.dataTransfer.files[0]);
+        });
+        window.addEventListener('paste', (e) => {
+            for (const it of e.clipboardData.items) {
+                if (it.type.startsWith('image/')) { loadFile(it.getAsFile()); break; }
+            }
+        });
+
+        async function loadFile(file) {
+            if (!file || !file.type.startsWith('image/')) return;
+            const url = URL.createObjectURL(file);
+            const img = new Image();
+            await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+            state.img = img;
+            const base = (file.name || 'pic').replace(/\.[^.]+$/, '');
+            state.baseName = asciiBase(base);
+            state.customName = false;
+            el('fileName').value = composeName();
+            el('nameHint').textContent = /[^\x20-\x7E]/.test(base)
+                ? '原文件名含中文，已去掉；名字末尾会自动带上当前参数（B亮度_C对比度_A自动_FS抖动_Q色板）'
+                : '名字末尾会自动带上当前参数（B亮度_C对比度_A自动_FS抖动_Q色板）';
+            render();
+        }
+
+        for (const id of ['selPalette', 'selDither', 'selSize', 'cbAuto', 'cbPanelMap']) {
+            el(id).addEventListener('input', render);
+            el(id).addEventListener('change', render);
+        }
+
+        /* 每个滑杆配一个数字框，两边同步 —— 滑杆只能拖个大概，精调要能直接输数值 */
+        const RANGES = ['rBright', 'rContrast', 'rSat', 'rLWeight',
+                        'rBlack', 'rShadow', 'rHighlight', 'rRadius', 'rTint', 'rDither'];
+
+        /**
+         * 黑点 = 面板最暗档位对应的中性灰 sRGB 值。
+         *
+         * 为什么自动：黑点是**面板属性**，不是画面属性。面板最暗只到某个 L*，
+         * 且再往下没有档位了；图像的黑点应该正好落在那里，否则暗部会脱节
+         * （太高 = 暗部塌成一团；太低 = 面板根本出不来）。
+         * 跟着色板自动算，用户就不用管了。
+         */
+        function autoBlack(palette) {
+            const L = palette.Lmin;
+            const fy = (L + 16) / 116;
+            const Y = fy * fy * fy;
+            const s = Y <= 0.0031308 ? 12.92 * Y : 1.055 * Math.pow(Y, 1 / 2.4) - 0.055;
+            return Math.max(0, Math.min(90, Math.round(s * 255)));
+        }
+
+        /* 预设：把"调参"变成"选一个"，大部分情况这就够了 */
+        const PRESETS = {
+            std: { bright: 0, contrast: 0, sat: 0, shadow: 0, highlight: 0, auto: true, blackAuto: true },
+            bright: { bright: 15, contrast: 0, sat: 0, shadow: 40, highlight: 0, auto: true, blackAuto: true },
+            vivid: { bright: 0, contrast: 5, sat: 30, shadow: 0, highlight: 0, auto: true, blackAuto: true },
+            rescue: { bright: 0, contrast: 0, sat: 0, shadow: 20, highlight: 60, auto: true, blackAuto: true },
+        };
+
+        function applyPreset(name) {
+            const p = PRESETS[name];
+            if (!p) return;
+            setRange('rBright', p.bright);
+            setRange('rContrast', p.contrast);
+            setRange('rSat', p.sat);
+            setRange('rShadow', p.shadow);
+            setRange('rHighlight', p.highlight);
+            el('cbAuto').checked = p.auto;
+            el('cbBlackAuto').checked = p.blackAuto;
+            if (!p.blackAuto) setRange('rBlack', 60);
+            render();
+        }
+
+        function setRange(id, v) {          // 同时设滑杆和数字框
+            const r = el(id), n = el(id + 'Num');
+            const lo = Number(r.min), hi = Number(r.max);
+            const clamped = Math.max(lo, Math.min(hi, Number(v)));
+            r.value = clamped;
+            if (n) n.value = clamped;
+        }
+
+        for (const b of document.querySelectorAll('button.preset')) {
+            b.addEventListener('click', () => applyPreset(b.dataset.preset));
+        }
+        el('cbAdv').addEventListener('change', () => {
+            el('advBox').hidden = !el('cbAdv').checked;
+        });
+        el('cbBlackAuto').addEventListener('change', render);
+
+        for (const id of RANGES) {
+            const r = el(id), n = el(id + 'Num');
+            if (!r) continue;
+
+            r.addEventListener('input', () => {          // 拖滑杆 -> 更新数字框
+                if (n) n.value = r.value;
+                render();
+            });
+
+            if (!n) continue;
+
+            n.addEventListener('input', () => {          // 输数字 -> 立刻更新滑杆
+                if (n.value === '') return;              // 允许中途清空重输
+                const v = Number(n.value);
+                if (Number.isNaN(v)) return;
+                const lo = Number(r.min), hi = Number(r.max);
+                r.value = Math.max(lo, Math.min(hi, v));
+                render();
+            });
+
+            n.addEventListener('change', () => {         // 失焦时把值规整回去
+                const lo = Number(r.min), hi = Number(r.max);
+                const v = Number(n.value);
+                const fixed = Number.isNaN(v) ? Number(r.value)
+                    : Math.max(lo, Math.min(hi, v));
+                n.value = fixed;
+                r.value = fixed;
+                render();
+            });
+
+            n.addEventListener('keydown', (e) => { if (e.key === 'Enter') n.blur(); });
+        }
+
+        el('btnResetTone').addEventListener('click', () => applyPreset('std'));
+        /* 用户手动改过名字就不再自动覆盖 */
+        el('fileName').addEventListener('input', () => { state.customName = true; });
+        el('btnSendFile').addEventListener('click', () => guard(sendFile));
+        el('btnSendRaw').addEventListener('click', () => guard(sendRaw));
+        el('btnList').addEventListener('click', () => guard(loadList));
+        el('btnClearLog').addEventListener('click', () => { logEl.textContent = ''; });
+
+        async function guard(fn) {
+            try { await fn(); }
+            catch (e) { logLine('出错：' + e.message, 'l-err'); stopPoll(); }
+        }
+
+        // ======================================================== 启动
+        await loadPalettes();
+        refreshButtons();
+        logLine('页面就绪。所有操作都经本地助手（server.py）走串口，不需要浏览器连串口。', 'l-ok');
+        logLine('先点右上角「读设备图片列表」看看设备里已经有什么。');
+        guard(loadList);
+    </script>
+</body>
+
+</html>

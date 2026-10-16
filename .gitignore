@@ -1,0 +1,41 @@
+# ---------------------------------------------------------------- 构建产物
+.pio/
+.pioenvs/
+.piolibdeps/
+build/
+out/
+cmp/
+*.bin
+*.elf
+*.map
+
+# PlatformIO 从 sdkconfig.defaults 生成，不入库
+sdkconfig
+sdkconfig.old
+sdkconfig.esp32s3
+
+# ---------------------------------------------------------------- 运行产物
+# 生成的 BMP 和索引文件（几百 KB 一个，随用随生成）
+sdcard/
+*.bin8
+*_preview.png
+*_side.png
+
+# 串口日志
+*.log
+
+# ---------------------------------------------------------------- Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 编辑时的临时片段
+host/_*.txt
+
+# ---------------------------------------------------------------- 编辑器
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
