@@ -1,0 +1,56 @@
+# OSPTEK ESP32-S3 Demo V1.3 + 3.7" JD7601 720x480 六色屏
+# 目标：复现 FrameFilm 的 48 色方案（8bpp 索引 -> 两个 3bit 平面 -> 多相刷新）
+
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_NUM=0
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+
+CONFIG_FREERTOS_HZ=1000
+
+# ---------------------------------------------------------------- stdin
+# 默认是 NEWLIB_STDIN_LINE_ENDING_CR —— 会把输入里**每一个 0x0D 换成 0x0A**，
+# 二进制走 stdin 直接被改坏。实测症状：传 200000 字节，固件收到 199232
+# （0x00030D40 -> 0x00030A40，就差那个 0x0D），CRC 必然对不上。
+# 选 LF = "不做任何修改，输入原样进 stdin"。
+# 副作用：终端回车发来的 \r 会原样到达，CLI 里两处都已同时处理 \r 和 \n。
+CONFIG_NEWLIB_STDIN_LINE_ENDING_LF=y
+
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# 172800 字节帧缓冲放 PSRAM
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_TYPE_AUTO=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+
+# ---------------------------------------------------------------- FATFS
+# 默认是 LFN_NONE（只支持 8.3 短名），中文文件名根本建不了，
+# 卡上的长名也会被截成 CR574E~1.BMP 这种。
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=255
+# 码表用简体中文（影响 8.3 短名的 OEM 编码；长名走 UTF-16 不受影响）
+CONFIG_FATFS_CODEPAGE_936=y
+
+# ---------------------------------------------------------------- WiFi
+# 让 ESP32-S3 直接连局域网，网页通过 WiFi 传图（串口 115200 太慢：
+# 345 KB 要 30 秒，WiFi 不到 0.5 秒）。
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=32
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=y
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=y
+
+# 大一点的 TCP 窗口，吞吐明显更好
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=32768
+CONFIG_LWIP_TCP_WND_DEFAULT=32768
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=32
+
+# HTTP 服务：上传 350 KB，接收超时给足（默认 5 秒容易中途断）
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=2048
+CONFIG_HTTPD_MAX_URI_LEN=1024
+

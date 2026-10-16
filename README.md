@@ -106,6 +106,9 @@ host/                  上位机工具（Python + 网页）
   check_page.py        页面 id 交叉核对（改完页面必跑）
   diag_red.py          复现网页管线，查"某个颜色不对"
 
+mono-ui/               单色快刷（MonoFast）子项目 —— 黑白差分，180 ms/帧
+                       独立 PlatformIO 工程：pio run -d mono-ui
+
 docs/                  方法论、测量数据、迭代记录
 legacy/                已停用的串口接图 / TF 卡存图代码（留档，不参与构建）
 ```
