@@ -35,6 +35,7 @@
 #include "bmp.h"
 #include "sdcard.h"
 #include "waveforms.h"
+#include "wifi_config.h"
 
 static const char *TAG = "main";
 
@@ -579,6 +580,7 @@ static bool cal_input(int c)
         case 'l':
         case 'd':
         case 'j':
+        case 'e':
             printf("（自动退出校准）\n");
             fflush(stdout);
             cal_exit();
@@ -605,6 +607,7 @@ static void print_help(void)
            "  u  串口收一张 8bpp 索引图并用 ColorQual 3 相显示\n"
            "  f  同上但用 ColorFast 2 相\n"
            "  k  只写 full_clear 波形不刷新（诊断）\n"
+           "  e  设备信息：WiFi 状态 / IP / 传图地址 / 文件数\n"
            "  i  重新初始化\n"
            "  s  POF 断电\n"
            "  ?  这份帮助\n");
@@ -664,6 +667,33 @@ static void cli_loop(void)
             case 'f': recv_and_display(true);  break;
             case 'w': recv_file_to_sd();       break;
             case 'k': step_wave_only();    break;
+            case 'e': {
+                /* 问设备要信息 —— 尤其是 IP（网页传图要用） */
+                if (!net_ready()) {
+                    printf("正在连 WiFi（%s）…\n", WIFI_SSID);
+                    fflush(stdout);
+                    net_wait_ready(8000);
+                }
+                printf("\n--- 设备信息 ---\n");
+                printf("  WiFi      : %s\n", net_ready() ? "已连接" : "未连接");
+                printf("  设备 IP   : %s\n", net_ip());
+                if (net_ready()) {
+                    printf("  网页传图  : http://%s/\n", net_ip());
+                } else {
+                    printf("  网页传图  : 不可用（没连上 WiFi）\n");
+                }
+                printf("  图片目录  : %s\n", IMAGE_DIR);
+                if (s_file_count > 0) {
+                    printf("  已扫到    : %d 张\n", s_file_count);
+                } else {
+                    printf("  已扫到    : 0 张（按 l 扫描）\n");
+                }
+                const char *msg = device_last_msg();
+                printf("  最近操作  : %s\n", (msg && msg[0]) ? msg : "（无）");
+                printf("\n");
+                fflush(stdout);
+                break;
+            }
             case 'i':
                 ESP_LOGI(TAG, "重新初始化");
                 (void)epd370_init();
@@ -765,6 +795,29 @@ esp_err_t device_show(int idx)
     sd_show(idx);
     device_set_last_msg("显示 [%d] %s", idx, s_files[idx].name);
     return ESP_OK;
+}
+
+esp_err_t device_show_raw(const uint8_t *idx, size_t len)
+{
+    const size_t want = (size_t)EPD370_WIDTH * EPD370_HEIGHT;
+    if (len != want) {
+        ESP_LOGE(TAG, "索引数据长度不对：%u，应该是 %u", (unsigned)len, (unsigned)want);
+        return ESP_ERR_INVALID_SIZE;
+    }
+    if (s_index == NULL) return ESP_ERR_NO_MEM;
+
+    memcpy(s_index, idx, want);
+
+    if (!epd370_is_ready() && epd370_init() != ESP_OK) {
+        ESP_LOGE(TAG, "初始化失败");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "直接显示 %u 字节索引（ColorQual 3 相）", (unsigned)want);
+    const esp_err_t e = display_qual(s_index);
+    image_drain_input(200);
+    device_set_last_msg("已直接显示 %u 字节", (unsigned)want);
+    return e;
 }
 
 esp_err_t device_save_and_show(const char *name, const uint8_t *data, size_t len)

@@ -19,6 +19,10 @@ esp_err_t net_start(void);
 /* 拿到 IP 没有 */
 bool net_ready(void);
 
+/* 等拿到 IP（最多 timeout_ms）。已经连上就立刻返回 true。
+ * 给串口 'e' 命令用 —— 刚上电时 WiFi 还没连上，直接问会得到 0.0.0.0。 */
+bool net_wait_ready(uint32_t timeout_ms);
+
 /* 当前 IP（未连接时返回 "0.0.0.0"） */
 const char *net_ip(void);
 

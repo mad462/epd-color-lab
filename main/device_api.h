@@ -36,6 +36,10 @@ int device_count(void);
 /* 显示第 idx 张（0 基）。越界返回 ESP_ERR_INVALID_ARG。 */
 esp_err_t device_show(int idx);
 
+/* 直接显示一份 8bpp 索引数据（不落盘）。len 必须是 720*480 = 345600。
+ * 对应串口的 'u' 那条路。 */
+esp_err_t device_show_raw(const uint8_t *idx, size_t len);
+
 /* 把一整份数据存成 IMAGE_DIR/<name>，然后显示它。
  *
  * 为什么整份收完再落盘：写 SD 卡会阻塞几十毫秒，边收边写会丢数据。

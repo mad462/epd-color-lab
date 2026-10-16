@@ -95,6 +95,7 @@
             <input type="text" id="ipAddr" placeholder="192.168.x.x" style="width:130px">
         </label>
         <button class="small" id="btnProbe">从串口读取</button>
+        <button class="small" id="btnPing">验证在线</button>
 
         <span class="spacer"></span>
         <button id="btnList" class="primary">读设备图片列表</button>
@@ -290,8 +291,12 @@
                 if (path === '/progress') {
                     return { active: true, phase: 'WiFi 传输中', sent: 0, total: 0 };
                 }
-                // 上传路径不一样：助手的 /send，设备的 /upload
-                url = base + path.replace(/^\/send(\?|$)/, '/upload$1');
+                // 上传路径不一样：助手的 /send，设备的 /upload；裸索引是 /raw
+                if (/[?&]type=raw/.test(path)) {
+                    url = base + '/raw';
+                } else {
+                    url = base + path.replace(/^\/send(\?|$)/, '/upload$1');
+                }
             }
 
             const ctrl = new AbortController();
@@ -1175,7 +1180,54 @@
                 await loadList();
             } else {
                 logLine('   没读到 IP。板子起来了吗？串口被别的程序占着吗？', 'l-err');
+                logLine('   也可以直接在串口里敲 e，设备会打印自己的 IP。', '');
                 syncLinkUI();
+            }
+        }));
+
+        // ---------------- 验证设备在不在线 ----------------
+        el('btnPing').addEventListener('click', () => guard(async () => {
+            if (!useWifi()) {
+                logLine('→ 串口模式：检查本地助手 server.py …', 'l-tx');
+                const r = await api('/progress', {}, 5000);
+                if (r && typeof r.active !== 'undefined') {
+                    logLine('   ✓ 本地助手在线', 'l-ok');
+                    el('dot').classList.add('on');
+                    el('status').textContent = '助手在线';
+                } else {
+                    logLine('   ✗ 助手没响应 —— server.py 起了吗？', 'l-err');
+                    el('dot').classList.remove('on');
+                    el('status').textContent = '助手离线';
+                }
+                return;
+            }
+
+            const base = wifiBase();
+            if (!base) {
+                logLine('还没填设备 IP。点「从串口读取」，或在串口里敲 e 看。', 'l-err');
+                return;
+            }
+
+            logLine('→ 检查设备 ' + base + ' …', 'l-tx');
+            el('status').textContent = '检查中…';
+            const t0 = performance.now();
+            const r = await api('/status', {}, 5000);
+            const ms = (performance.now() - t0).toFixed(0);
+
+            if (r && r.ok) {
+                logLine(`   ✓ 设备在线（${ms} ms）`, 'l-ok');
+                logLine(`     IP ${r.ip}   已扫到 ${r.files} 张`);
+                if (r.last) logLine('     最近操作：' + r.last);
+                el('dot').classList.add('on');
+                el('status').textContent = '在线 ' + r.ip;
+            } else {
+                logLine(`   ✗ 设备没响应（${ms} ms）：` + ((r && r.log) || []).join(' '), 'l-err');
+                logLine('     依次检查：');
+                logLine('       ① IP 对不对 —— 串口里敲 e，设备会打印自己的 IP');
+                logLine('       ② 板子还在跑吗 —— 串口敲 e 有反应就是活的');
+                logLine('       ③ 电脑和板子是不是同一个 WiFi（SiFei_Wifi_3）');
+                el('dot').classList.remove('on');
+                el('status').textContent = '设备不在线';
             }
         }));
 

@@ -238,6 +238,52 @@ static esp_err_t h_upload(httpd_req_t *req)
     return send_json(req, "{\"ok\":true}");
 }
 
+/* ---------------------------------------------------------------- /raw
+ * 直接显示一份 8bpp 索引数据，不落盘。对应串口的 'u'。
+ * 网页的「只显示，不存卡」走这条。 */
+static esp_err_t h_raw(httpd_req_t *req)
+{
+    const int total = req->content_len;
+    if (total != 720 * 480) {
+        char b[128];
+        snprintf(b, sizeof(b),
+                 "{\"ok\":false,\"error\":\"长度不对: %d，应该是 345600\"}", total);
+        return send_json(req, b);
+    }
+
+    ESP_LOGI(TAG, "收到原始索引 %d 字节", total);
+    device_set_last_msg("接收索引 %d 字节 …", total);
+
+    uint8_t *buf = heap_caps_malloc(total, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) return send_json(req, "{\"ok\":false,\"error\":\"分配缓冲失败\"}");
+
+    int got = 0;
+    while (got < total) {
+        const int r = httpd_req_recv(req, (char *)buf + got, total - got);
+        if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (r <= 0) {
+            free(buf);
+            device_set_last_msg("接收中断（%d/%d）", got, total);
+            return send_json(req, "{\"ok\":false,\"error\":\"接收中断\"}");
+        }
+        got += r;
+    }
+
+    if (!device_lock(60000)) {
+        free(buf);
+        return send_json(req, "{\"ok\":false,\"error\":\"设备忙\"}");
+    }
+    const esp_err_t e = device_show_raw(buf, (size_t)got);
+    device_unlock();
+    free(buf);
+
+    if (e != ESP_OK) {
+        device_set_last_msg("直接显示失败: %s", esp_err_to_name(e));
+        return send_json(req, "{\"ok\":false,\"error\":\"显示失败\"}");
+    }
+    return send_json(req, "{\"ok\":true}");
+}
+
 /* ---------------------------------------------------------------- OPTIONS */
 static esp_err_t h_options(httpd_req_t *req)
 {
@@ -251,7 +297,7 @@ static esp_err_t start_http(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = 80;
-    cfg.max_uri_handlers = 8;
+    cfg.max_uri_handlers = 12;
     cfg.lru_purge_enable = true;
     cfg.stack_size = 8192;
     /* 默认 5 秒。传 345 KB 时中间可能卡顿，给足余量。 */
@@ -269,7 +315,9 @@ static esp_err_t start_http(void)
         { .uri = "/list",     .method = HTTP_GET,  .handler = h_list },
         { .uri = "/show",     .method = HTTP_GET,  .handler = h_show },
         { .uri = "/upload",   .method = HTTP_POST, .handler = h_upload },
+        { .uri = "/raw",      .method = HTTP_POST, .handler = h_raw },
         { .uri = "/upload",   .method = HTTP_OPTIONS, .handler = h_options },
+        { .uri = "/raw",      .method = HTTP_OPTIONS, .handler = h_options },
         { .uri = "/list",     .method = HTTP_OPTIONS, .handler = h_options },
         { .uri = "/status",   .method = HTTP_OPTIONS, .handler = h_options },
     };
@@ -323,3 +371,12 @@ esp_err_t net_start(void)
 
 bool net_ready(void) { return s_ready; }
 const char *net_ip(void) { return s_ip; }
+
+bool net_wait_ready(uint32_t timeout_ms)
+{
+    const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
+    while (!s_ready && xTaskGetTickCount() < deadline) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    return s_ready;
+}
