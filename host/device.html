@@ -47,6 +47,13 @@
         .drop { border: 1.5px dashed var(--line); border-radius: 10px; padding: 22px;
                 text-align: center; color: var(--dim); cursor: pointer; transition: .15s; }
         .drop:hover, .drop.over { border-color: var(--acc); color: var(--tx); background: #1a1f2b; }
+        /* 整页拖入提示：拖文件进窗口时盖住全屏 */
+        #dropOverlay { position: fixed; inset: 0; z-index: 999; display: none;
+                       align-items: center; justify-content: center;
+                       background: rgba(20, 26, 40, .88); border: 3px dashed var(--acc);
+                       color: var(--tx); font-size: 22px; font-weight: 600;
+                       pointer-events: none; }
+        #dropOverlay.on { display: flex; }
         .views { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
         .views figure { margin: 0; }
         .views figcaption { font-size: 12px; color: var(--dim); margin-bottom: 6px; }
@@ -80,6 +87,7 @@
 </head>
 
 <body>
+    <div id="dropOverlay">松手即可载入图片</div>
     <header>
         <h1>48色墨水屏 · 传图台</h1>
         <span class="pill"><span class="dot on" id="dot"></span><span id="status">就绪</span></span>
@@ -105,8 +113,9 @@
         <div>
             <div class="card">
                 <h2>1 · 选图</h2>
-                <div class="drop" id="drop">
-                    点击选择图片，或拖进来 / 直接 Ctrl+V 粘贴
+                <div class="hint" style="text-align:center;padding:8px 0;font-size:13.5px">
+                    <b>把图片拖到页面任意位置</b>，或 Ctrl+V 粘贴，或
+                    <button class="small" id="btnPick">选择图片</button>
                     <input type="file" id="file" accept="image/*" hidden>
                 </div>
                 <div class="views">
@@ -198,10 +207,10 @@
                             <input type="checkbox" id="cbSerpentine" checked> 蛇形扫描</label>
                         <label class="opt" style="flex-direction:row;gap:6px;align-items:center"
                                title="源色越饱和，越优先保色相而不是保明暗。红唇、红花这类小面积饱和色不会塌成灰">
-                            <input type="checkbox" id="cbChromaGuard" checked> 饱和色保色相</label>
+                            <input type="checkbox" id="cbChromaGuard"> 饱和色保色相</label>
                         <label class="opt" style="flex-direction:row;gap:6px;align-items:center"
                                title="按饱和度平滑处理：越饱和越向原色靠、越少扩散误差。既保住色相又不开裂渐变">
-                            <input type="checkbox" id="cbPureSat" checked> 饱和色不抖动</label>
+                            <input type="checkbox" id="cbPureSat"> 饱和色不抖动</label>
                         <button class="small" id="btnResetTone">全部复位</button>
                     </div>
                     <div class="hint" id="mapInfo">—</div>
@@ -707,22 +716,22 @@
                     const x = rev ? (w - 1 - i) : i;
                     const o = (y * w + x) * 4;
 
-                    /* 「饱和色不抖动」—— 注意是**渐变**，不是开关。
+                    /* 「饱和色不抖动」—— 按**色度**平滑处理，不是开关。
                      *
-                     * 为什么：色板的红色族根本到不了鲜红。让 Floyd 全额去抖，
-                     * 一部分像素挑红、一部分被邻域误差带偏挑灰，平均下来就是「灰红」。
+                     * 为什么不用 getSaturation：那是 HSV 式的 (max-min)/max，
+                     * **对暗色完全不可靠** —— 近黑 #050508 算出来饱和度 0.375，
+                     * 于是暗部被当成"饱和色"处理、不给扩散误差 -> 暗部大面积断层。
                      *
-                     * 但第一版做成硬开关（饱和度 >=0.5 就完全不抖、不扩散）**过头了**：
-                     * 饱和区域里会切出硬边，而且误差不扩散，渐变直接断掉 —— 用户报
-                     * 「红色过头，而且到处出现断层」。
+                     * 改用「max-min」这个色度代理，并且门槛设得高（90~170）：
+                     *   肤色 #D6A082  max-min = 84   -> k=0   正常抖动
+                     *   暗衣服 #2A3040 max-min = 22   -> k=0   正常抖动（不再断层）
+                     *   鲜红/艳蓝     max-min > 150   -> k~0.85 基本顶替
                      *
-                     * 改成按饱和度平滑插值：
-                     *   k = 向"原始像素值"靠近的比例，也是误差扩散的衰减比例
-                     *   中性色 k=0（正常抖动，渐变靠它） 饱和色 k=0.85（基本顶替）
-                     * 这样既保住色相，又不会切开渐变。 */
+                     * k 同时是"向原色靠近的比例"和"误差扩散的衰减"，所以是渐变不是硬边。 */
                     const r0 = pixels[o], g0 = pixels[o + 1], b0 = pixels[o + 2];
-                    const sat = getSaturation(r0, g0, b0);
-                    const k = pureSat ? 0.85 * Math.min(1, sat / 0.6) : 0;
+                    const mx = Math.max(r0, Math.max(g0, b0));
+                    const mn = Math.min(r0, Math.min(g0, b0));
+                    const k = pureSat ? 0.85 * smoothstep(90, 170, mx - mn) : 0;
 
                     const wr = Math.max(0, Math.min(255, work[o]));
                     const wg = Math.max(0, Math.min(255, work[o + 1]));
@@ -741,7 +750,7 @@
                      * 对饱和像素把明度权重降下来，它就会宁可牺牲一点明暗也要选红色。
                      * epdoptimize 的 colorMatching:"chroma" 是同一个思路。 */
                     const effW = chromaGuard
-                        ? lw * (1 - 0.7 * getSaturation(r | 0, g | 0, b | 0))
+                        ? lw * (1 - 0.7 * smoothstep(90, 170, mx - mn))
                         : lw;
 
                     const [L, A, B] = rgbToLab(r | 0, g | 0, b | 0);
@@ -1055,13 +1064,33 @@
         }
 
         // ======================================================== 事件
-        const drop = el('drop'), fileInput = el('file');
-        drop.addEventListener('click', () => fileInput.click());
+        const fileInput = el('file');
+        el('btnPick').addEventListener('click', () => fileInput.click());
         fileInput.addEventListener('change', () => loadFile(fileInput.files[0]));
-        drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
-        drop.addEventListener('dragleave', () => drop.classList.remove('over'));
-        drop.addEventListener('drop', (e) => {
-            e.preventDefault(); drop.classList.remove('over'); loadFile(e.dataTransfer.files[0]);
+
+        /* 整页响应拖入 —— 不用先瞄准那个小框 */
+        const overlay = el('dropOverlay');
+        let dragDepth = 0;
+        window.addEventListener('dragenter', (e) => {
+            e.preventDefault();
+            dragDepth++;
+            overlay.classList.add('on');
+        });
+        window.addEventListener('dragover', (e) => {
+            e.preventDefault();               /* 不阻止的话浏览器会直接打开文件 */
+            e.dataTransfer.dropEffect = 'copy';
+        });
+        window.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            dragDepth = Math.max(0, dragDepth - 1);
+            if (dragDepth === 0) overlay.classList.remove('on');
+        });
+        window.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dragDepth = 0;
+            overlay.classList.remove('on');
+            const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+            if (f) loadFile(f);
         });
         window.addEventListener('paste', (e) => {
             for (const it of e.clipboardData.items) {
@@ -1118,7 +1147,7 @@
             bright: -11, contrast: 0, sat: 0,
             shadow: 0, highlight: 100, radius: 12,
             tint: -10, lWeight: 1.2, ditherAmt: 100,
-            panelMap: 0, auto: true, blackAuto: true, serpentine: true, chromaGuard: true, pureSat: true,
+            panelMap: 0, auto: true, blackAuto: true, serpentine: true, chromaGuard: false, pureSat: false,
         };
 
         const PRESETS = {
