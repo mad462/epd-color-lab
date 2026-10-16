@@ -82,7 +82,20 @@
 <body>
     <header>
         <h1>48色墨水屏 · 传图台</h1>
-        <span class="pill"><span class="dot on" id="dot"></span><span id="status">本地助手</span></span>
+        <span class="pill"><span class="dot on" id="dot"></span><span id="status">就绪</span></span>
+
+        <label class="opt" style="flex-direction:row;align-items:center;gap:6px">连接方式
+            <select id="selLink">
+                <option value="wifi" selected>WiFi 直连（快，~3 秒）</option>
+                <option value="serial">串口 / 本地助手（慢，~30 秒）</option>
+            </select>
+        </label>
+
+        <label class="opt" style="flex-direction:row;align-items:center;gap:6px" id="ipWrap">设备 IP
+            <input type="text" id="ipAddr" placeholder="192.168.x.x" style="width:130px">
+        </label>
+        <button class="small" id="btnProbe">从串口读取</button>
+
         <span class="spacer"></span>
         <button id="btnList" class="primary">读设备图片列表</button>
     </header>
@@ -251,16 +264,44 @@
         }
         function logLine(t, c) { log(t + '\n', c); }
 
-        // 页面上所有和设备的交互都走本地助手（server.py），
-        // 不用 Web Serial —— 某些机器上浏览器枚举不到 CH343。
+        // ======================================================== 通信层
+        //
+        // 两条路：
+        //   WiFi   网页直接 POST 到设备（http://<设备IP>/upload），快 —— 338 KB 约 3 秒
+        //   串口   走本地助手 server.py，慢（115200 下要 30 秒），但不依赖局域网
+        //
+        // 设备的接口和助手故意做成同样的形状，所以上层只差一个 base URL
+        // 和上传路径（/upload vs /send）。
+        function useWifi() { return el('selLink').value === 'wifi'; }
+
+        function wifiBase() {
+            const ip = el('ipAddr').value.trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+            return ip ? ('http://' + ip) : '';
+        }
+
         async function api(path, opts = {}, timeoutMs = 600000) {
+            let url = path;
+
+            if (useWifi()) {
+                const base = wifiBase();
+                if (!base) {
+                    return { ok: false, log: ['还没填设备 IP —— 点「从串口读取」或手动填'] };
+                }
+                if (path === '/progress') {
+                    return { active: true, phase: 'WiFi 传输中', sent: 0, total: 0 };
+                }
+                // 上传路径不一样：助手的 /send，设备的 /upload
+                url = base + path.replace(/^\/send(\?|$)/, '/upload$1');
+            }
+
             const ctrl = new AbortController();
             const timer = setTimeout(() => ctrl.abort(), timeoutMs);
             try {
-                const res = await fetch(path, { ...opts, signal: ctrl.signal });
+                const res = await fetch(url, { ...opts, signal: ctrl.signal });
                 return await res.json();
             } catch (e) {
-                return { ok: false, log: ['和本地助手通讯失败：' + e.message + '（server.py 起了吗？）'] };
+                const who = useWifi() ? '设备' : '本地助手';
+                return { ok: false, log: [`和${who}通讯失败：` + e.message] };
             } finally {
                 clearTimeout(timer);
             }
@@ -1098,6 +1139,46 @@
         el('btnList').addEventListener('click', () => guard(loadList));
         el('btnClearLog').addEventListener('click', () => { logEl.textContent = ''; });
 
+        // ---------------- 连接方式 ----------------
+        function syncLinkUI() {
+            const w = useWifi();
+            el('ipWrap').style.display = w ? '' : 'none';
+            el('btnProbe').style.display = w ? '' : 'none';
+            el('status').textContent = w
+                ? (wifiBase() ? 'WiFi ' + el('ipAddr').value.trim() : '待填 IP')
+                : '串口 / 本地助手';
+        }
+
+        el('selLink').addEventListener('change', () => {
+            localStorage.setItem('epd_link', el('selLink').value);
+            syncLinkUI();
+            logLine(useWifi()
+                ? '切到 WiFi 直连：网页直接 POST 到设备，338 KB 约 3 秒'
+                : '切到串口：经本地助手 server.py 传，115200 下 338 KB 要约 30 秒', 'l-ok');
+            guard(loadList);
+        });
+
+        el('ipAddr').addEventListener('change', () => {
+            localStorage.setItem('epd_ip', el('ipAddr').value.trim());
+            syncLinkUI();
+        });
+
+        el('btnProbe').addEventListener('click', () => guard(async () => {
+            logLine('→ 从串口读设备 IP（注意：打开串口会让板子重启一次，2~3 秒后自动重连）', 'l-tx');
+            el('status').textContent = '读取中…';
+            const r = await api('/device', {}, 30000);
+            if (r.ok && r.ip) {
+                el('ipAddr').value = r.ip;
+                localStorage.setItem('epd_ip', r.ip);
+                logLine('   设备 IP = ' + r.ip, 'l-ok');
+                syncLinkUI();
+                await loadList();
+            } else {
+                logLine('   没读到 IP。板子起来了吗？串口被别的程序占着吗？', 'l-err');
+                syncLinkUI();
+            }
+        }));
+
         async function guard(fn) {
             try { await fn(); }
             catch (e) { logLine('出错：' + e.message, 'l-err'); stopPoll(); }
@@ -1106,9 +1187,27 @@
         // ======================================================== 启动
         await loadPalettes();
         refreshButtons();
-        logLine('页面就绪。所有操作都经本地助手（server.py）走串口，不需要浏览器连串口。', 'l-ok');
-        logLine('先点右上角「读设备图片列表」看看设备里已经有什么。');
-        guard(loadList);
+
+        /* 记住上次用的连接方式和 IP —— 这两样每次都要填太烦 */
+        const savedLink = localStorage.getItem('epd_link');
+        if (savedLink) el('selLink').value = savedLink;
+        const savedIp = localStorage.getItem('epd_ip');
+        if (savedIp) el('ipAddr').value = savedIp;
+        syncLinkUI();
+
+        if (useWifi()) {
+            logLine('页面就绪。WiFi 直连模式 —— 网页直接 POST 到设备，不用串口。', 'l-ok');
+            if (!wifiBase()) {
+                logLine('还没有设备 IP：点右边「从串口读取」，或手动填（设备启动时串口会打印）。');
+            } else {
+                logLine('设备地址：' + wifiBase());
+                guard(loadList);
+            }
+        } else {
+            logLine('页面就绪。串口模式 —— 所有操作经本地助手 server.py 走串口。', 'l-ok');
+            logLine('先点右上角「读设备图片列表」看看设备里已经有什么。');
+            guard(loadList);
+        }
     </script>
 </body>
 

@@ -308,6 +308,40 @@ def show_device_file(i):
             pass
 
 
+def read_device_ip(timeout_s=15.0):
+    """从串口读几秒，抓设备启动时打印的 IP。
+
+    ⚠️ 打开串口会复位板子（CH343 的 DTR/RTS），所以这一步会让设备重启一次。
+    重启后 2~3 秒就能重新连上 WiFi，代价可以接受。
+    """
+    log = []
+    pattern = re.compile(r"IP:\s*(\d+\.\d+\.\d+\.\d+)")
+    try:
+        ser = serial.Serial(SERIAL_PORT, BAUD, timeout=0.3)
+    except Exception as e:
+        return None, [f"打不开 {SERIAL_PORT}: {e}"]
+
+    try:
+        ser.setDTR(False)
+        ser.setRTS(False)
+        t0 = time.time()
+        while time.time() - t0 < timeout_s:
+            line = ser.readline()
+            if not line:
+                continue
+            text = line.decode("utf-8", "replace").rstrip()
+            log.append(text)
+            m = pattern.search(text)
+            if m:
+                return m.group(1), log
+    finally:
+        try:
+            ser.close()
+        except Exception:
+            pass
+    return None, log
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=ROOT)
@@ -353,6 +387,16 @@ class Handler(SimpleHTTPRequestHandler):
                 _lock.release()
             print(f"[show] i={i} ok={ok}")
             return self._json({"ok": ok, "log": log})
+
+        if u.path == "/device":
+            if not _lock.acquire(blocking=False):
+                return self._json({"ok": False, "log": ["串口忙"]}, 409)
+            try:
+                ip, log = read_device_ip()
+            finally:
+                _lock.release()
+            print(f"[device] ip={ip}")
+            return self._json({"ok": bool(ip), "ip": ip, "log": log[-8:]})
 
         return super().do_GET()
 

@@ -7,6 +7,7 @@ idf_component_register(
         "bmp.c"
         "sdcard.c"
         "palette_table.c"
+        "net.c"
     INCLUDE_DIRS
         "."
     PRIV_REQUIRES
@@ -15,6 +16,11 @@ idf_component_register(
         esp_driver_sdmmc
         esp_common
         esp_timer
+        esp_wifi
+        esp_event
+        esp_netif
+        esp_http_server
+        nvs_flash
         fatfs
         heap
         sdmmc

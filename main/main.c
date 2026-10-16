@@ -13,6 +13,7 @@
  * 本工程独立，不动 jd7601 / e6-730 / epd0356。
  * ---------------------------------------------------------------------- */
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,10 +24,13 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#include "device_api.h"
 #include "epd370.h"
 #include "image.h"
+#include "net.h"
 #include "palette_table.h"
 #include "bmp.h"
 #include "sdcard.h"
@@ -678,9 +682,138 @@ static void cli_loop(void)
     }
 }
 
+/* ============================================ 给 HTTP 服务用的设备接口
+ *
+ * 面板 SPI 和 TF 卡是**共享资源**，串口命令行和网页服务不能同时动它们。
+ * 统一用一把互斥锁串起来（见 device_api.h）。
+ */
+static SemaphoreHandle_t s_dev_mutex;
+static char s_last_msg[96] = "";
+
+bool device_lock(uint32_t timeout_ms)
+{
+    if (s_dev_mutex == NULL) return true;
+    return xSemaphoreTake(s_dev_mutex, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+}
+
+void device_unlock(void)
+{
+    if (s_dev_mutex) xSemaphoreGive(s_dev_mutex);
+}
+
+void device_set_last_msg(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(s_last_msg, sizeof(s_last_msg), fmt, ap);
+    va_end(ap);
+}
+
+const char *device_last_msg(void) { return s_last_msg; }
+int device_count(void) { return s_file_count; }
+
+/* 扫一遍卡，只更新内部列表 */
+static int device_rescan(void)
+{
+    if (!sdcard_is_mounted() && sdcard_mount() != ESP_OK) {
+        s_file_count = 0;
+        return 0;
+    }
+    (void)sdcard_ensure_dir(IMAGE_DIR);
+    s_file_count = sdcard_scan_dir(IMAGE_DIR, ".bmp", s_files, SDCARD_MAX_ENTRIES);
+    return s_file_count;
+}
+
+int device_scan(device_file_t *out, int max)
+{
+    const int total = device_rescan();
+    if (out == NULL) return total;
+
+    int n = 0;
+    for (int i = 0; i < total && n < max; i++) {
+        device_file_t *d = &out[n];
+        memset(d, 0, sizeof(*d));
+        snprintf(d->name, sizeof(d->name), "%s", s_files[i].name);
+
+        char path[SDCARD_NAME_MAX + 32];
+        snprintf(path, sizeof(path), "%s/%s", IMAGE_DIR, s_files[i].name);
+
+        struct stat st;
+        d->size = (stat(path, &st) == 0) ? (long)st.st_size : -1;
+
+        bmp_info_t info;
+        if (bmp_read_info(path, &info) == ESP_OK) {
+            d->is_bmp = true;
+            d->w = info.width;
+            d->h = info.height;
+            d->bpp = (int)info.bit_depth;
+            d->colors = (int)info.palette_colors;
+        }
+        n++;
+    }
+    return n;
+}
+
+esp_err_t device_show(int idx)
+{
+    if (s_file_count <= 0) {
+        device_rescan();
+        if (s_file_count <= 0) return ESP_ERR_NOT_FOUND;
+    }
+    if (idx < 0 || idx >= s_file_count) return ESP_ERR_INVALID_ARG;
+
+    sd_show(idx);
+    device_set_last_msg("显示 [%d] %s", idx, s_files[idx].name);
+    return ESP_OK;
+}
+
+esp_err_t device_save_and_show(const char *name, const uint8_t *data, size_t len)
+{
+    if (!sdcard_is_mounted() && sdcard_mount() != ESP_OK) {
+        ESP_LOGE(TAG, "TF 卡没挂上");
+        return ESP_FAIL;
+    }
+    if (sdcard_ensure_dir(IMAGE_DIR) != ESP_OK) return ESP_FAIL;
+
+    char path[SDCARD_NAME_MAX + 32];
+    snprintf(path, sizeof(path), "%s/%s", IMAGE_DIR, name);
+
+    const int64_t t0 = esp_timer_get_time();
+    FILE *f = fopen(path, "wb");
+    if (f == NULL) {
+        ESP_LOGE(TAG, "打不开 %s", path);
+        return ESP_FAIL;
+    }
+    const size_t w = fwrite(data, 1, len, f);
+    fclose(f);
+    if (w != len) {
+        ESP_LOGE(TAG, "只写了 %u/%u 字节", (unsigned)w, (unsigned)len);
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "落盘 %s（%u 字节，%lld ms）", name, (unsigned)len,
+             (esp_timer_get_time() - t0) / 1000);
+
+    device_rescan();
+    int idx = -1;
+    for (int i = 0; i < s_file_count; i++) {
+        if (strcmp(s_files[i].name, name) == 0) { idx = i; break; }
+    }
+    if (idx < 0) {
+        ESP_LOGW(TAG, "存好了但列表里找不到 %s", name);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    sd_show(idx);
+    device_set_last_msg("已保存并显示 %s", name);
+    return ESP_OK;
+}
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "3.7\" JD7601 48色校准固件启动");
+
+    /* 设备操作互斥锁 —— 串口命令行和网页服务共用面板与 TF 卡 */
+    s_dev_mutex = xSemaphoreCreateMutex();
 
     /* 8bpp 索引缓冲：720*480 = 345600 字节，放 PSRAM */
     s_index = (uint8_t *)heap_caps_malloc((size_t)EPD370_WIDTH * EPD370_HEIGHT,
@@ -694,8 +827,14 @@ void app_main(void)
         ESP_LOGW(TAG, "开机初始化没成功，按 'c' 会重试");
     }
 
+    /* 连 WiFi 并起 HTTP 服务。失败了不影响串口那条路，所以不检查返回值。 */
+    if (net_start() != ESP_OK) {
+        ESP_LOGW(TAG, "WiFi/HTTP 没起来，只能用串口传图");
+    }
+
     /* 按校准使用习惯：开机不挂卡、不刷屏，直接进校准模式等串口输入。
-     * 要看 TF 卡上的图，先按 'x' 退出校准，再按 'l'。 */
+     * 要看 TF 卡上的图，先按 'x' 退出校准，再按 'l'。
+     * 网页那条路不受影响 —— HTTP 请求会自己退出校准（见 cal_input）。 */
     cal_enter();
 
     cli_loop();

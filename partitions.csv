@@ -1,0 +1,17 @@
+# Partition table.
+#
+# Why not the default: the stock singleapp layout gives the app only 1 MB.
+# After adding the WiFi stack the image grew past 1 MB and the board would
+# not boot ("Factory app partition is not bootable", image 1103472 bytes
+# vs partition 1048576 bytes).
+#
+# Board has 16 MB flash, so give the app 4 MB. No SPIFFS partition needed --
+# pictures live on the TF card.
+#
+# NOTE: keep this file ASCII-only. PlatformIO parses it with the system
+#       locale (GBK on a Chinese Windows) and non-ASCII comments blow up.
+#
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x6000,
+phy_init, data, phy,     0xf000,   0x1000,
+factory,  app,  factory, 0x10000,  0x400000,
