@@ -76,6 +76,8 @@
         .chk label { display: flex; align-items: center; gap: 5px;
                      font-size: 12px; color: var(--dim); }
         .hint { color: var(--dim); font-size: 12px; margin-top: 6px; }
+        /* 空的时候别占一行高（之前写死一个「—」把面板撑长了一行） */
+        .hint:empty { display: none; }
 
         details.adv { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
         details.adv > summary { cursor: pointer; color: var(--dim); font-size: 12.5px;
@@ -143,7 +145,7 @@
         <div class="card">
             <h2>量化后（将下发到设备）</h2>
             <div class="view"><canvas id="cvDst" width="480" height="720"></canvas></div>
-            <div class="hint" id="txHint">—</div>
+            <div class="hint" id="txHint"></div>
         </div>
 
         <!-- 列 3：参数 -->
@@ -188,7 +190,7 @@
                 <button class="small" id="btnSaveDefault"
                         title="把当前所有参数存成下次打开的默认值">存为默认</button>
             </div>
-            <div class="hint" id="toneInfo">—</div>
+            <div class="hint" id="toneInfo"></div>
 
             <details class="adv">
                 <summary>高级</summary>
@@ -239,7 +241,6 @@
                 <div class="row tight">
                     <button class="small" id="btnResetTone">全部复位</button>
                 </div>
-                <div class="hint" id="mapInfo">—</div>
             </details>
         </div>
     </main>
@@ -849,27 +850,42 @@
 
         // ======================================================== 下发
         // 进度显示在按钮自己身上：按下后底色变暗，亮色填充从左往右长。
-        // /raw 是一次 POST，中途拿不到真实字节数，所以按时间估算：
-        // 传输很快（几秒），大头是面板刷新 15 秒。
+        //
+        // 「下发」其实涵盖两个阶段，文案要分开：
+        //   ① 下发中  —— 把 345600 字节索引传到板子（约 3 秒）
+        //   ② 刷新中  —— 板子刷面板（4 个相位，约 15 秒）
+        //
+        // /raw 是一次 POST，中途拿不到真实进度（板子要等刷完才回），
+        // 所以按时间估算、按阶段切文案。想要精确进度得让固件报状态，那要重烧。
         async function send() {
             if (!state.idx) return;
             if (!wifiBase()) { say('还没填设备 IP —— 点「从串口读取」，或在串口里敲 e 看', 'l-err'); return; }
 
             const n = state.idx.length;
             const btn = el('btnSend'), prog = el('prog'), span = btn.querySelector('span');
-            const estMs = (n / 115200) * 1000 + 15000;   // 传输 + 面板刷新
+            const upMs = Math.max(800, (n / 115200) * 1000);   // 传输估计
+            const refreshMs = 15000;                            // 面板刷新
+            const estMs = upMs + refreshMs;
 
             btn.disabled = true;
             btn.classList.add('busy');
             span.textContent = '下发中';
-            prog.style.width = '4%';
+            prog.style.width = '3%';
 
             const t0 = performance.now();
             const tick = setInterval(() => {
-                const el2 = performance.now() - t0;
-                prog.style.width = Math.min(93, el2 / estMs * 100).toFixed(1) + '%';
-                say(`下发中… ${(el2 / 1000).toFixed(0)} 秒 / 约 ${(estMs / 1000).toFixed(0)} 秒`
-                    + `（传输 ${(n / 115200).toFixed(1)} 秒 + 面板刷新）`);
+                const t = performance.now() - t0;
+                if (t < upMs) {
+                    span.textContent = '下发中';
+                    prog.style.width = (3 + t / upMs * 13).toFixed(1) + '%';
+                    say(`下发中… ${(t / 1000).toFixed(1)} 秒（共 ${n} 字节索引）`);
+                } else {
+                    span.textContent = '刷新中';
+                    const k = Math.min(1, (t - upMs) / refreshMs);
+                    prog.style.width = (16 + k * 77).toFixed(1) + '%';
+                    say(`面板刷新中… ${((t - upMs) / 1000).toFixed(0)} / 15 秒`
+                        + `（4 个相位，这段绕不开）`);
+                }
             }, 150);
 
             const r = await api('/raw', { method: 'POST', body: state.idx }, 180000);
@@ -882,7 +898,7 @@
             setTimeout(() => { prog.style.width = '0'; btn.classList.remove('busy'); }, 1400);
 
             if (r && r.ok) {
-                say(`✓ 下发完成（${dt} 秒）`, 'l-ok');
+                say(`✓ 已刷新到屏幕（全程 ${dt} 秒：下发 ${(upMs / 1000).toFixed(1)}s + 刷新 ${refreshMs / 1000}s）`, 'l-ok');
                 el('dot').classList.add('on');
                 el('status').textContent = '在线 ' + el('ipAddr').value.trim();
             } else {
