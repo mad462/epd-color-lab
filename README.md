@@ -8,6 +8,24 @@
 
 ---
 
+## 致谢
+
+**本项目建立在 [FrameFilm](https://github.com/kirmisaki/FrameFilm) 的工作之上。**
+
+固件里的 9 张面板波形表（`main/waveforms.c`，各 799 字节）直接取自 FrameFilm 的
+`hal_epd_370.c`。**没有这部分，48 色根本跑不起来** —— 波形是这块屏的"配方"，
+不是能算出来的东西，只能靠逆向和实测得到。
+
+FrameFilm 以 **GPL-3.0** 发布，本项目因此采用**同一许可**，见 [LICENSE](LICENSE)。
+
+另外还参考了：
+
+| 项目 | 用到了什么 |
+|---|---|
+| epdoptimize | 动态范围压缩的强度混合、色度保护、二分拟合、蛇形扫描 |
+
+---
+
 ## 硬件
 
 | | |
@@ -146,5 +164,4 @@ python host/make_palette_table.py --fw-dir main     --qual-csv docs/palette_qual
 
 **GPL-3.0**，见 [LICENSE](LICENSE)。
 
-固件里的 9 张波形表取自 [FrameFilm](https://github.com/kirmisaki/FrameFilm)（GPL-3.0），
-本项目因此整体采用同一许可。
+原因见前面的[致谢](#致谢)：波形表取自 GPL-3.0 的 FrameFilm，本项目只能同许可。
