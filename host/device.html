@@ -35,10 +35,10 @@
         .dot { width: 8px; height: 8px; border-radius: 50%; background: #555; }
         .dot.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
 
-        /* 三栏：原图 | 量化 | 参数 */
-        main { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr) 350px;
-               gap: 16px; padding: 16px 20px 40px; align-items: start; }
-        @media (max-width: 1150px) { main { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
+        /* 三栏：原图 | 量化 | 参数。参数列给宽一点，好把控件两两并排 */
+        main { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr) 402px;
+               gap: 16px; padding: 14px 18px; align-items: start; }
+        @media (max-width: 1250px) { main { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
                                      #settingsCol { grid-column: 1 / -1; } }
 
         .card { background: var(--panel); border: 1px solid var(--line);
@@ -46,10 +46,14 @@
         .card h2 { font-size: 12px; margin: 0 0 10px; color: var(--dim);
                    font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
 
+        /* 参数列自己滚，别把整页顶长 */
+        #settingsCol { max-height: calc(100vh - 128px); overflow-y: auto; }
+
         .view { position: relative; }
-        .view canvas { width: 100%; height: auto; border: 1px solid var(--line);
-                       border-radius: 8px; background: #0e1014; display: block;
-                       image-rendering: pixelated; }
+        .view canvas { display: block; margin: 0 auto; max-width: 100%;
+                       max-height: calc(100vh - 168px); width: auto; height: auto;
+                       border: 1px solid var(--line); border-radius: 8px;
+                       background: #0e1014; image-rendering: pixelated; }
         /* 空状态：提示放在预览框正中间 */
         .empty { position: absolute; inset: 0; display: flex; flex-direction: column;
                  align-items: center; justify-content: center; gap: 10px;
@@ -57,18 +61,23 @@
                  border: 1.5px dashed var(--line); border-radius: 8px; background: #0e1014; }
         .empty b { color: var(--tx); font-size: 15px; }
         .empty.hide { display: none; }
-        .empty button { pointer-events: auto; }
 
-        label.opt { display: flex; flex-direction: column; gap: 5px;
-                    font-size: 12.5px; color: var(--dim); }
-        .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
-        .row + .row { margin-top: 12px; }
-        .rg { display: flex; align-items: center; gap: 7px; }
-        .rg input[type=range] { width: 96px; }
-        .rg input[type=number] { width: 62px; padding: 4px 6px; text-align: center; font-size: 13px; }
-        .hint { color: var(--dim); font-size: 12.5px; margin-top: 10px; }
+        label.opt { display: flex; flex-direction: column; gap: 4px;
+                    font-size: 12px; color: var(--dim); }
+        .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end;
+               margin-bottom: 8px; }
+        .row.tight { gap: 8px; }
+        .row > label.opt { flex: 1 1 44%; min-width: 0; }
+        .row > label.opt select { width: 100%; }
+        .rg { display: flex; align-items: center; gap: 5px; }
+        .rg input[type=range] { width: 74px; }
+        .rg input[type=number] { width: 54px; padding: 3px 4px; text-align: center; font-size: 12.5px; }
+        .chk { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-bottom: 8px; }
+        .chk label { display: flex; align-items: center; gap: 5px;
+                     font-size: 12px; color: var(--dim); }
+        .hint { color: var(--dim); font-size: 12px; margin-top: 6px; }
 
-        details.adv { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+        details.adv { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
         details.adv > summary { cursor: pointer; color: var(--dim); font-size: 12.5px;
                                 list-style: none; user-select: none; }
         details.adv > summary::-webkit-details-marker { display: none; }
@@ -76,8 +85,8 @@
         details.adv[open] > summary::before { content: "▾ "; }
         details.adv > summary:hover { color: var(--tx); }
 
-        #statusLine { padding: 0 20px 8px; color: var(--dim); font-size: 12.5px;
-                      min-height: 20px; white-space: nowrap; overflow: hidden;
+        #statusLine { padding: 0 18px 6px; color: var(--dim); font-size: 12.5px;
+                      min-height: 19px; white-space: nowrap; overflow: hidden;
                       text-overflow: ellipsis; }
 
         #dropOverlay { position: fixed; inset: 0; z-index: 999; display: none;
@@ -87,9 +96,14 @@
                        pointer-events: none; }
         #dropOverlay.on { display: flex; }
 
-        #bar { height: 6px; background: var(--panel2); border-radius: 99px;
-               overflow: hidden; margin-top: 10px; }
-        #prog { display: block; height: 100%; width: 0; background: var(--acc); transition: width .2s; }
+        #bar { display: none; }
+
+        /* 下发按钮当进度条：底色是按钮，亮色填充是进度 */
+        #btnSend { position: relative; overflow: hidden; transition: background .15s; }
+        #btnSend > i { position: absolute; left: 0; top: 0; bottom: 0; width: 0;
+                       background: rgba(255, 255, 255, .42); transition: width .2s; }
+        #btnSend > span { position: relative; z-index: 1; }
+        #btnSend.busy { background: #24406e; border-color: #24406e; }
     </style>
 </head>
 
@@ -106,7 +120,7 @@
         <button class="small" id="btnProbe">从串口读取</button>
 
         <span class="spacer"></span>
-        <button id="btnSend" class="primary big" disabled>下发</button>
+        <button id="btnSend" class="primary big" disabled><i id="prog"></i><span>下发</span></button>
     </header>
     <div id="statusLine">还没读到设备 IP —— 点「从串口读取」，或在串口里敲 e 看设备打印的地址。</div>
 
@@ -129,7 +143,6 @@
         <div class="card">
             <h2>量化后（将下发到设备）</h2>
             <div class="view"><canvas id="cvDst" width="480" height="720"></canvas></div>
-            <div id="bar"><i id="prog"></i></div>
             <div class="hint" id="txHint">—</div>
         </div>
 
@@ -137,50 +150,41 @@
         <div class="card" id="settingsCol">
             <h2>参数</h2>
 
-            <div class="row">
+            <div class="row tight">
                 <label class="opt">色板 <select id="selPalette"></select></label>
-            </div>
-            <div class="row">
                 <label class="opt">抖动 <select id="selDither">
-                        <option value="floyd-steinberg" selected>Floyd Steinberg（推荐）</option>
+                        <option value="floyd-steinberg" selected>Floyd Steinberg</option>
                         <option value="atkinson">Atkinson</option>
                         <option value="stucki">Stucki</option>
                         <option value="burkes">Burkes</option>
                         <option value="sierra">Sierra</option>
-                        <option value="none">不使用抖动</option>
+                        <option value="none">不抖动</option>
                     </select></label>
             </div>
-            <div class="row">
+            <div class="row tight">
                 <label class="opt">构图尺寸 <select id="selSize">
-                        <option value="720x480">720 × 480（设备原生）</option>
-                        <option value="480x720" selected>480 × 720 竖版（设备转正）</option>
+                        <option value="720x480">720 × 480 原生</option>
+                        <option value="480x720" selected>480 × 720 竖版</option>
                     </select></label>
-            </div>
-
-            <div class="row">
-                <label class="opt">亮度 <span class="rg">
-                        <input type="range" id="rBright" min="-40" max="40" value="-11">
-                        <input type="number" id="rBrightNum" min="-40" max="40" value="-11"></span></label>
-            </div>
-            <div class="row">
-                <label class="opt">对比度 <span class="rg">
-                        <input type="range" id="rContrast" min="-40" max="40" value="0">
-                        <input type="number" id="rContrastNum" min="-40" max="40" value="0"></span></label>
-            </div>
-            <div class="row">
                 <label class="opt">饱和度 <span class="rg">
                         <input type="range" id="rSat" min="0" max="80" value="0">
                         <input type="number" id="rSatNum" min="0" max="80" value="0"></span></label>
             </div>
+            <div class="row tight">
+                <label class="opt">亮度 <span class="rg">
+                        <input type="range" id="rBright" min="-40" max="40" value="-11">
+                        <input type="number" id="rBrightNum" min="-40" max="40" value="-11"></span></label>
+                <label class="opt">对比度 <span class="rg">
+                        <input type="range" id="rContrast" min="-40" max="40" value="0">
+                        <input type="number" id="rContrastNum" min="-40" max="40" value="0"></span></label>
+            </div>
 
-            <div class="row" style="margin-top:14px">
-                <span style="color:var(--dim);font-size:12.5px">预设</span>
+            <div class="row tight">
+                <span style="color:var(--dim);font-size:12px;align-self:center">预设</span>
                 <button class="small preset" data-preset="std">标准</button>
                 <button class="small preset" data-preset="bright">提亮</button>
                 <button class="small preset" data-preset="vivid">浓一点</button>
                 <button class="small preset" data-preset="rescue">救高光</button>
-            </div>
-            <div class="row">
                 <button class="small" id="btnSaveDefault"
                         title="把当前所有参数存成下次打开的默认值">存为默认</button>
             </div>
@@ -189,69 +193,50 @@
             <details class="adv">
                 <summary>高级</summary>
 
-                <div class="row">
+                <div class="row tight">
                     <label class="opt">黑点 <span class="rg">
                             <input type="range" id="rBlack" min="0" max="90" value="60">
                             <input type="number" id="rBlackNum" min="0" max="90" value="60"></span></label>
-                </div>
-                <div class="row">
-                    <label class="opt" style="flex-direction:row;gap:6px;align-items:center">
-                        <input type="checkbox" id="cbBlackAuto" checked> 黑点自动跟随色板</label>
-                </div>
-                <div class="row">
                     <label class="opt">色偏微调 <span class="rg">
                             <input type="range" id="rTint" min="-20" max="20" value="-10">
                             <input type="number" id="rTintNum" min="-20" max="20" value="-10"></span></label>
                 </div>
-                <div class="row">
+                <div class="row tight">
                     <label class="opt">明度权重 <span class="rg">
                             <input type="range" id="rLWeight" min="0.4" max="3" step="0.1" value="1.2">
                             <input type="number" id="rLWeightNum" min="0.4" max="3" step="0.1" value="1.2"></span></label>
-                </div>
-                <div class="row">
                     <label class="opt">阴影 <span class="rg">
                             <input type="range" id="rShadow" min="-100" max="100" value="0">
                             <input type="number" id="rShadowNum" min="-100" max="100" value="0"></span></label>
                 </div>
-                <div class="row">
+                <div class="row tight">
                     <label class="opt">高光 <span class="rg">
                             <input type="range" id="rHighlight" min="-100" max="100" value="100">
                             <input type="number" id="rHighlightNum" min="-100" max="100" value="100"></span></label>
-                </div>
-                <div class="row">
                     <label class="opt">半径 <span class="rg">
                             <input type="range" id="rRadius" min="2" max="60" value="12">
                             <input type="number" id="rRadiusNum" min="2" max="60" value="12"></span></label>
                 </div>
-                <div class="row">
+                <div class="row tight">
                     <label class="opt">抖动强度 <span class="rg">
                             <input type="range" id="rDither" min="0" max="150" value="100">
                             <input type="number" id="rDitherNum" min="0" max="150" value="100"></span></label>
-                </div>
-                <div class="row">
-                    <label class="opt">映射到面板范围 <span class="rg">
+                    <label class="opt">映射到面板 <span class="rg">
                             <input type="range" id="rPanelMap" min="0" max="100" value="0">
                             <input type="number" id="rPanelMapNum" min="0" max="100" value="0"></span></label>
                 </div>
-                <div class="row">
-                    <label class="opt" style="flex-direction:row;gap:6px;align-items:center">
-                        <input type="checkbox" id="cbAuto" checked> 自动色阶</label>
-                </div>
-                <div class="row">
-                    <label class="opt" style="flex-direction:row;gap:6px;align-items:center">
-                        <input type="checkbox" id="cbSerpentine" checked> 蛇形扫描</label>
-                </div>
-                <div class="row">
-                    <label class="opt" style="flex-direction:row;gap:6px;align-items:center"
-                           title="源色越饱和越优先保色相。实测在暗部会引入断层，默认关">
+
+                <div class="chk">
+                    <label><input type="checkbox" id="cbBlackAuto" checked> 黑点自动</label>
+                    <label><input type="checkbox" id="cbAuto" checked> 自动色阶</label>
+                    <label><input type="checkbox" id="cbSerpentine" checked> 蛇形扫描</label>
+                    <label title="源色越饱和越优先保色相。实测在暗部会引入断层，默认关">
                         <input type="checkbox" id="cbChromaGuard"> 饱和色保色相</label>
-                </div>
-                <div class="row">
-                    <label class="opt" style="flex-direction:row;gap:6px;align-items:center"
-                           title="按色度平滑压制误差扩散。实测在暗部会引入断层，默认关">
+                    <label title="按色度平滑压制误差扩散。实测在暗部会引入断层，默认关">
                         <input type="checkbox" id="cbPureSat"> 饱和色不抖动</label>
                 </div>
-                <div class="row">
+
+                <div class="row tight">
                     <button class="small" id="btnResetTone">全部复位</button>
                 </div>
                 <div class="hint" id="mapInfo">—</div>
@@ -863,24 +848,41 @@
         }
 
         // ======================================================== 下发
+        // 进度显示在按钮自己身上：按下后底色变暗，亮色填充从左往右长。
+        // /raw 是一次 POST，中途拿不到真实字节数，所以按时间估算：
+        // 传输很快（几秒），大头是面板刷新 15 秒。
         async function send() {
             if (!state.idx) return;
-            const base = wifiBase();
-            if (!base) { say('还没填设备 IP —— 点「从串口读取」，或在串口里敲 e 看', 'l-err'); return; }
+            if (!wifiBase()) { say('还没填设备 IP —— 点「从串口读取」，或在串口里敲 e 看', 'l-err'); return; }
 
             const n = state.idx.length;
-            say(`正在下发 ${n} 字节（约 ${(n / 115200).toFixed(1)} 秒 + 面板刷新 15 秒）…`);
-            el('prog').style.width = '35%';
-            el('btnSend').disabled = true;
+            const btn = el('btnSend'), prog = el('prog'), span = btn.querySelector('span');
+            const estMs = (n / 115200) * 1000 + 15000;   // 传输 + 面板刷新
+
+            btn.disabled = true;
+            btn.classList.add('busy');
+            span.textContent = '下发中';
+            prog.style.width = '4%';
+
             const t0 = performance.now();
-            const r = await api('/raw', { method: 'POST', body: state.idx }, 120000);
+            const tick = setInterval(() => {
+                const el2 = performance.now() - t0;
+                prog.style.width = Math.min(93, el2 / estMs * 100).toFixed(1) + '%';
+                say(`下发中… ${(el2 / 1000).toFixed(0)} 秒 / 约 ${(estMs / 1000).toFixed(0)} 秒`
+                    + `（传输 ${(n / 115200).toFixed(1)} 秒 + 面板刷新）`);
+            }, 150);
+
+            const r = await api('/raw', { method: 'POST', body: state.idx }, 180000);
+            clearInterval(tick);
             const dt = ((performance.now() - t0) / 1000).toFixed(1);
-            el('prog').style.width = '100%';
-            setTimeout(() => { el('prog').style.width = '0'; }, 1500);
-            el('btnSend').disabled = false;
+
+            prog.style.width = '100%';
+            span.textContent = '下发';
+            btn.disabled = false;
+            setTimeout(() => { prog.style.width = '0'; btn.classList.remove('busy'); }, 1400);
 
             if (r && r.ok) {
-                say(`✓ 下发完成（${dt} 秒，含面板刷新）`, 'l-ok');
+                say(`✓ 下发完成（${dt} 秒）`, 'l-ok');
                 el('dot').classList.add('on');
                 el('status').textContent = '在线 ' + el('ipAddr').value.trim();
             } else {
