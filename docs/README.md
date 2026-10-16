@@ -24,7 +24,7 @@
 改色板时要同时更新，否则固件认不出 BMP 用的哪张色板：
 
 ```powershell
-python ..\host\make_act.py --act-dir C:\FUCKWEB\quick-shake-pic\act --qual-csv palette_qual_measured.csv
+python ..\host\make_act.py --act-dir <QUICKSHAKE_DIR>\act --qual-csv palette_qual_measured.csv
 python ..\host\make_act.py --act-dir ..\host\act                        --qual-csv palette_qual_measured.csv
 python ..\host\make_palette_table.py --fw-dir ..\main                    --qual-csv palette_qual_measured.csv
 ```

@@ -12,7 +12,7 @@
 （QuickShakePic 的 parseActPalette 按 floor(长度/3) 读色数，所以 192 字节就是 64 色。）
 
 用法：
-    python make_act.py --act-dir C:\\FUCKWEB\\quick-shake-pic\\act
+    python make_act.py --act-dir <导出目录>\\act
 """
 
 import argparse

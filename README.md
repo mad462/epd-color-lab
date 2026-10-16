@@ -92,7 +92,7 @@ docs/                 文档与数据
 否则固件认不出 BMP 用的是哪张色板：
 
 ```powershell
-python host\make_act.py --act-dir C:\FUCKWEB\quick-shake-pic\act --qual-csv docs\palette_qual_measured.csv
+python host\make_act.py --act-dir <QUICKSHAKE_DIR>\act --qual-csv docs\palette_qual_measured.csv
 python host\make_act.py --act-dir host\act                          --qual-csv docs\palette_qual_measured.csv
 python host\make_palette_table.py --fw-dir main                      --qual-csv docs\palette_qual_measured.csv
 ```
@@ -118,3 +118,54 @@ python host\make_palette_table.py --fw-dir main                      --qual-csv 
 
 固件中的波形表取自 [FrameFilm](https://github.com/kirmisaki/FrameFilm)（GPL-3.0），
 本项目相应部分同样适用 GPL-3.0。
+
+---
+
+## 配网（首次使用必做）
+
+**固件里没有 WiFi 密码。** 密码只存在设备自己的 NVS 里，代码里一个字符都没有 ——
+这个仓库是开源的，把密码编译进去等于公开发布。
+
+### 方法一：配网助手（推荐）
+
+```bash
+python host/wifi_setup.py
+```
+
+它会问你要 SSID 和密码，密码用 `getpass` 读（**不回显**，也不进命令历史），
+然后通过串口写进设备。配完当场生效，不用重启。
+
+```bash
+python host/wifi_setup.py -s MyWiFi      # 只问密码
+python host/wifi_setup.py --clear        # 清掉设备里保存的 WiFi
+python host/wifi_setup.py --port COM7 -v # 换串口 + 看设备完整输出
+```
+
+### 方法二：串口里敲 `W`
+
+任意串口工具（115200）里敲大写 `W`：
+
+```
+=== WiFi 配网 ===
+  当前    : （还没配过）
+WiFi 名称（SSID）: MyWiFi
+密码（输入不回显，输完回车）: ********
+正在保存到 NVS 并连接 MyWiFi …
+等待拿 IP.......
+✓ 已连上，IP = 192.168.3.10
+```
+
+- 密码用 `*` 回显，**不打明文**（免得留在日志或录屏里）
+- `ESC` 取消，退格可删
+- SSID 处输入 `S` 回车 = 清除已保存的凭据
+
+### 配完干什么
+
+浏览器打开 `http://<设备IP>/`（固件会打印，或串口敲 `e` 查）。
+
+### 为什么不自动发现设备
+
+网页没法扫描局域网，所以 IP 得手动填。串口敲 `e` 会打印当前 IP，
+网页上「从串口读取」按钮也能读（底层是 `host/server.py` 打开串口抓日志）。
+
+> 注意：打开串口会让板子复位一次（CH343 的 DTR/RTS 会跳），2~3 秒后重连。

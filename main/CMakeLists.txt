@@ -8,6 +8,7 @@ idf_component_register(
         "sdcard.c"
         "palette_table.c"
         "net.c"
+        "wifi_store.c"
     INCLUDE_DIRS
         "."
     PRIV_REQUIRES

@@ -4,17 +4,18 @@
 用法：
     python extract_waveforms.py
 
-输入：C:\\Users\\Chizhi\\Desktop\\FrameFilm-main\\firmware\\frame_film_ark\\components\\film_hal\\src\\hal_epd_370.c
-输出：<工程>\\main\\waveforms.c / waveforms.h
+输入：<FRAMEFILM_DIR>\\firmware\\frame_film_ark\\components\\film_hal\\src\\hal_epd_370.c
+      （用环境变量 FRAMEFILM_DIR 指定 FrameFilm 仓库根目录）
+输出：..\\main\\waveforms.c / waveforms.h
 """
 
 import os
 import re
 import sys
 
-SRC = (r"C:\Users\Chizhi\Desktop\FrameFilm-main\firmware\frame_film_ark"
+SRC = (os.environ.get("FRAMEFILM_DIR", "") + r"\firmware\frame_film_ark"
        r"\components\film_hal\src\hal_epd_370.c")
-OUT = r"C:\FUCKEDA\e6-48color\main"
+OUT = r"\main"
 
 # 想要哪些波形（其余不带，省 flash）
 WANTED = [

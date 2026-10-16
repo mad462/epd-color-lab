@@ -35,7 +35,7 @@
 #include "bmp.h"
 #include "sdcard.h"
 #include "waveforms.h"
-#include "wifi_config.h"
+#include "wifi_store.h"
 
 static const char *TAG = "main";
 
@@ -379,8 +379,10 @@ static bool cal_input(int c)
             cal_exit();
             return true;
 
-        /* 问设备信息：退出校准，交给普通分支执行 */
+        /* 问设备信息 / 配网：退出校准，交给普通分支处理。
+         * 不列在这里的话会被下面的 default 吞掉（校准模式忽略一切未列出的键）。 */
         case 'e':
+        case 'W':
             printf("（自动退出校准）\n");
             fflush(stdout);
             cal_exit();
@@ -388,6 +390,122 @@ static bool cal_input(int c)
 
         default:
             return true;   /* 校准模式里其它键一律忽略，避免误触 */
+    }
+}
+
+/* ---------------- 串口配网 ----------------
+ *
+ * 固件里**不写** WiFi 密码（这仓库要开源）。改成串口配一次、存进 NVS，
+ * 掉电不丢、重烧固件也不清（除非擦 flash）。
+ *
+ * 密码用 * 回显，不打明文 —— 免得留在串口日志或录屏里。
+ */
+
+/** 读一行。mask=true 时只回显 *；ESC 取消（返回 -1）；退格可删。 */
+static int read_line(char *buf, int cap, bool mask)
+{
+    int n = 0;
+    for (;;) {
+        const int c = getchar();
+        if (c == EOF) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+        if (c == '\r' || c == '\n') {
+            putchar('\n');
+            break;
+        }
+        if (c == 27) {                       /* ESC */
+            printf("（已取消）\n");
+            buf[0] = '\0';
+            fflush(stdout);
+            return -1;
+        }
+        if (c == 8 || c == 127) {            /* 退格 */
+            if (n > 0) {
+                n--;
+                printf("\b \b");
+                fflush(stdout);
+            }
+            continue;
+        }
+        if (n < cap - 1) {
+            buf[n++] = (char)c;
+            putchar(mask ? '*' : c);
+            fflush(stdout);
+        }
+    }
+    buf[n] = '\0';
+    return n;
+}
+
+static void wifi_setup_flow(void)
+{
+    char cur[WIFI_SSID_MAX] = { 0 };
+    const bool have = (wifi_store_load(cur, sizeof(cur), NULL, 0) == ESP_OK && cur[0]);
+
+    printf("\n=== WiFi 配网 ===\n");
+    printf("  当前    : %s\n", have ? cur : "（还没配过）");
+    printf("  说明    : 密码只存进设备 NVS，固件里没有；不回显、不打印\n");
+    printf("  取消    : 按 ESC\n");
+    printf("  清除    : SSID 处输入一个 S 回车\n");
+    printf("\n");
+
+    char ssid[WIFI_SSID_MAX];
+    printf("WiFi 名称（SSID）: ");
+    fflush(stdout);
+    const int n = read_line(ssid, sizeof(ssid), false);
+    if (n < 0) {
+        return;
+    }
+    if (n == 0) {
+        printf("没输入，放弃。\n");
+        return;
+    }
+    if (n == 1 && (ssid[0] == 'S' || ssid[0] == 's')) {
+        wifi_store_clear();
+        printf("已清除保存的 WiFi。断电重开就回到「未配网」状态。\n");
+        return;
+    }
+
+    char pass[WIFI_PASS_MAX];
+    printf("密码（输入不回显，输完回车）: ");
+    fflush(stdout);
+    if (read_line(pass, sizeof(pass), true) < 0) {
+        return;
+    }
+
+    printf("\n正在保存到 NVS 并连接 %s …\n", ssid);
+    fflush(stdout);
+
+    const esp_err_t e = wifi_store_save(ssid, pass);
+    if (e != ESP_OK) {
+        printf("保存失败：%s\n", esp_err_to_name(e));
+        return;
+    }
+    if (!net_wifi_started()) {
+        printf("WiFi 还没启动过（开机时没配过网）。重启设备后生效。\n");
+        return;
+    }
+    if (net_apply_credentials(ssid, pass) != ESP_OK) {
+        printf("连接失败，检查一下 SSID / 密码。\n");
+        return;
+    }
+
+    printf("等待拿 IP");
+    fflush(stdout);
+    for (int i = 0; i < 40 && !net_ready(); i++) {      /* 最多等 8 秒 */
+        vTaskDelay(pdMS_TO_TICKS(200));
+        putchar('.');
+        fflush(stdout);
+    }
+    putchar('\n');
+
+    if (net_ready()) {
+        printf("\n✓ 已连上，IP = %s\n", net_ip());
+        printf("  网页传图地址: http://%s/\n\n", net_ip());
+    } else {
+        printf("\n✗ 8 秒内没拿到 IP。SSID / 密码对吗？信号够吗？\n\n");
     }
 }
 
@@ -401,6 +519,7 @@ static void print_help(void)
            "  c  进入校准模式（逐个刷满屏，打实测用）\n"
            "  k  只写 full_clear 波形不刷新（诊断）\n"
            "  e  设备信息：WiFi 状态 / IP / 传图地址 / 文件数\n"
+           "  W  WiFi 配网（串口输 SSID 和密码，存进 NVS；固件里不写密码）\n"
            "  i  重新初始化\n"
            "  s  POF 断电\n"
            "  ?  这份帮助\n");
@@ -429,10 +548,18 @@ static void cli_loop(void)
                 cal_enter();
                 break;
             case 'k': step_wave_only();    break;
+            case 'W':
+                wifi_setup_flow();
+                break;
+
             case 'e': {
                 /* 问设备要信息 —— 尤其是 IP（网页传图要用） */
+                if (!net_wifi_started()) {
+                    printf("\n还没配过 WiFi。敲 W 配网（串口输 SSID 和密码）。\n");
+                    break;
+                }
                 if (!net_ready()) {
-                    printf("正在连 WiFi（%s）…\n", WIFI_SSID);
+                    printf("正在连 WiFi…\n");
                     fflush(stdout);
                     net_wait_ready(8000);
                 }

@@ -19,7 +19,7 @@ import os
 import re
 import sys
 
-ROOT = r"C:\FUCKEDA\e6-48color"
+ROOT = r""
 LEG = os.path.join(ROOT, "legacy", "firmware")
 
 MAIN_FUNCS = [

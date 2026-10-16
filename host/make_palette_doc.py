@@ -8,7 +8,7 @@
 import csv
 import os
 
-DOCS = r"C:\FUCKEDA\e6-48color\docs"
+DOCS = r"\docs"
 
 # convert.js 里实际用的候选索引（比 film.md 标的 55/46 多几个）
 CAND_FAST = [0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,

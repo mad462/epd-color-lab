@@ -12,10 +12,12 @@ import csv
 import os
 import re
 
-ROOT = r"C:\Users\Chizhi\Desktop\FrameFilm-main"
+ROOT = os.environ.get("FRAMEFILM_DIR", "")
+if not ROOT:
+    sys.exit("请先设置环境变量 FRAMEFILM_DIR 指向 FrameFilm 仓库根目录")
 JS = os.path.join(ROOT, r"tools\ForFilm\js\convert.js")
 MD = os.path.join(ROOT, r"docs\film\film.md")
-OUT = r"C:\FUCKEDA\e6-48color\docs"
+OUT = r"\docs"
 
 CAND_FAST = [0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
              20, 21, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37,

@@ -7,7 +7,7 @@
 
 import { readFileSync } from 'node:fs';
 
-const HTML = 'C:/FUCKWEB/quick-shake-pic/device.html';
+const HTML = process.argv[2] || './device.html';
 const html = readFileSync(HTML, 'utf8');
 
 function extract(name) {
@@ -38,10 +38,10 @@ const factory = new Function(tableSrc + '\n' + src + '\nreturn { buildBMP, crc32
 const { buildBMP, crc32 } = factory();
 
 // ---------------------------------------------------------------- 色板
-const act = new Uint8Array(readFileSync('C:/FUCKWEB/quick-shake-pic/act/48-color-qual.act'));
+const act = new Uint8Array(readFileSync(process.argv[3] || './act/48-color-qual.act'));
 console.log('48-color-qual.act:', act.length, '字节 ->', act.length / 3, '色');
 
-const csv = readFileSync('C:/FUCKEDA/e6-48color/docs/palette_qual.csv', 'utf8').trim().split('\n').slice(1);
+const csv = readFileSync('docs/palette_qual.csv', 'utf8').trim().split('\n').slice(1);
 const csvColors = csv.map((l) => {
     const p = l.split(',');
     return [Number(p[1]), Number(p[2]), Number(p[3])];
@@ -57,7 +57,7 @@ for (let i = 0; i < Math.min(jsColors.length, csvColors.length); i++) {
 console.log('色板与 CSV 一致:', ok ? 'YES' : 'NO', `(${jsColors.length} 项)`);
 
 // ---------------------------------------------------------------- BMP 对比
-const pyBmp = new Uint8Array(readFileSync('C:/FUCKEDA/e6-48color/cmp/收藏到 Wallpape 2025_qual_atkinson_lab.bmp'));
+const pyBmp = new Uint8Array(readFileSync('cmp/收藏到 Wallpape 2025_qual_atkinson_lab.bmp'));
 const pOff = new DataView(pyBmp.buffer).getUint32(10, true);
 const w = new DataView(pyBmp.buffer).getInt32(18, true);
 const h = new DataView(pyBmp.buffer).getInt32(22, true);

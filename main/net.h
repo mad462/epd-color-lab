@@ -23,6 +23,12 @@ bool net_ready(void);
  * 给串口 'e' 命令用 —— 刚上电时 WiFi 还没连上，直接问会得到 0.0.0.0。 */
 bool net_wait_ready(uint32_t timeout_ms);
 
+/* 用新的凭据重连（串口配网用）。凭据的持久化在 wifi_store 里做。 */
+esp_err_t net_apply_credentials(const char *ssid, const char *pass);
+
+/* WiFi 驱动起来了吗（没配过网时 net_start 不会启 WiFi） */
+bool net_wifi_started(void);
+
 /* 当前 IP（未连接时返回 "0.0.0.0"） */
 const char *net_ip(void);
 

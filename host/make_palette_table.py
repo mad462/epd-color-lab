@@ -11,7 +11,7 @@
   2. 校准模式：逐个索引刷满屏，并把标称颜色打出来给仪器对照
 
 用法：
-    python make_palette_table.py --fw-dir C:\\FUCKEDA\\e6-48color\\main
+    python make_palette_table.py --fw-dir main
 """
 
 import argparse

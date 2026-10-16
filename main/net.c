@@ -25,7 +25,7 @@
 #include "device_api.h"
 #include "epd370.h"
 #include "net.h"
-#include "wifi_config.h"
+#include "wifi_store.h"
 
 static const char *TAG = "net";
 
@@ -245,17 +245,28 @@ esp_err_t net_start(void)
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         IP_EVENT, IP_EVENT_STA_GOT_IP, &on_wifi, NULL, NULL));
 
-    wifi_config_t wc = { 0 };
-    snprintf((char *)wc.sta.ssid, sizeof(wc.sta.ssid), "%s", WIFI_SSID);
-    snprintf((char *)wc.sta.password, sizeof(wc.sta.password), "%s", WIFI_PASSWORD);
-    wc.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-
+    /* WiFi 驱动**总是**启动，只有「去连」是条件性的。
+     *
+     * 为什么不能"没凭据就整个跳过"：那样串口配网时 esp_wifi_set_config
+     * 会失败（驱动没起来），配完得重启才生效。现在配完当场就连。 */
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));   /* 省电模式会拖慢传输 */
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    ESP_LOGI(TAG, "正在连 %s …", WIFI_SSID);
+    /* 凭据从 NVS 读 —— 固件里不写密码（这个仓库要开源）。 */
+    char ssid[WIFI_SSID_MAX], pass[WIFI_PASS_MAX];
+    if (wifi_store_load(ssid, sizeof(ssid), pass, sizeof(pass)) != ESP_OK
+        || ssid[0] == '\0') {
+        ESP_LOGW(TAG, "还没配过 WiFi —— 串口敲 W 配网（配完当场生效，不用重启）");
+        s_ready = false;
+        s_ip[0] = '\0';
+    } else {
+        ESP_LOGI(TAG, "WiFi 凭据来自 NVS：%s（密码 %u 字符）",
+                 ssid, (unsigned)strlen(pass));
+        if (net_apply_credentials(ssid, pass) != ESP_OK) {
+            ESP_LOGE(TAG, "发起连接失败");
+        }
+    }
 
     /* 显示任务 —— /raw 收完数据由它去刷屏，httpd 任务不阻塞 */
     s_raw_q = xQueueCreate(2, sizeof(raw_job_t));
@@ -270,6 +281,33 @@ esp_err_t net_start(void)
 
     /* HTTP 服务不用等 IP —— 起来了就能接（虽然没 IP 时访问不到） */
     return start_http();
+}
+
+esp_err_t net_apply_credentials(const char *ssid, const char *pass)
+{
+    wifi_config_t wc = { 0 };
+    snprintf((char *)wc.sta.ssid, sizeof(wc.sta.ssid), "%s", ssid);
+    snprintf((char *)wc.sta.password, sizeof(wc.sta.password), "%s", pass ? pass : "");
+    wc.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+
+    s_ready = false;
+    s_ip[0] = '\0';
+    esp_wifi_disconnect();
+
+    esp_err_t e = esp_wifi_set_config(WIFI_IF_STA, &wc);
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "设置 WiFi 配置失败: %s", esp_err_to_name(e));
+        return e;
+    }
+    esp_wifi_connect();
+    ESP_LOGI(TAG, "正在用新凭据连 %s …", ssid);
+    return ESP_OK;
+}
+
+bool net_wifi_started(void)
+{
+    wifi_mode_t m;
+    return esp_wifi_get_mode(&m) == ESP_OK;
 }
 
 bool net_ready(void) { return s_ready; }

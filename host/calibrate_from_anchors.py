@@ -24,7 +24,10 @@ import os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DOCS = os.path.join(os.path.dirname(HERE), "docs")
-EPD = r"C:\Users\Chizhi\Desktop\epdoptimize-main\src\dither\data\default-palettes.json"
+EPD = os.environ.get("EPDOPTIMIZE_DIR", "")
+if not EPD:
+    sys.exit("请先设置环境变量 EPDOPTIMIZE_DIR 指向 epdoptimize 仓库根目录")
+EPD = os.path.join(EPD, "src", "dither", "data", "default-palettes.json")
 
 # 我们色板里对应 6 个原生基色的索引（按标称值和原色的距离找出来的）
 ANCHORS = [("black", 3), ("white", 15), ("blue", 18),

@@ -178,7 +178,9 @@ def render(idx, pal):
 
 # ---------------------------------------------------------------- 主流程
 def main():
-    src_path = sys.argv[1] if len(sys.argv) > 1 else r"C:\Users\Chizhi\Desktop\- 02.png"
+    if len(sys.argv) < 2:
+        sys.exit("用法：python " + os.path.basename(__file__) + " <图片路径>")
+    src_path = sys.argv[1]
     mea, used_mea = load_palette(os.path.join(DOCS, "palette_qual_measured.csv"))
     nom, used_nom = load_palette(os.path.join(DOCS, "palette_qual.csv"))
 
