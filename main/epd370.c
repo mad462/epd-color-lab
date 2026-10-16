@@ -14,8 +14,11 @@
 static const char *TAG = "epd370";
 
 #define EPD370_SPI_HOST   SPI2_HOST
-/* FrameFilm 用 40 MHz；这里先 10 MHz 求稳，通了再往上提。 */
-#define EPD370_SPI_HZ     (10 * 1000 * 1000)
+/* 40 MHz。原来是 10 MHz（"先求稳"），但单色快刷那个工程在同一块板、同一组线上
+ * 已经跑 40 MHz 很久没出错，就把彩色这边也提上来。
+ * 收益：相位之间每次推平面 172800 字节，10 MHz 要 138 ms，40 MHz 只要 35 ms，
+ * 一帧推两次 → 省约 0.2 s；配合 /raw 那条路的实测，全程 17.0 → ~16.8 s。 */
+#define EPD370_SPI_HZ     (40 * 1000 * 1000)
 #define EPD370_CHUNK      8192
 
 /* JD7601 命令 */
